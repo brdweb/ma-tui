@@ -63,7 +63,7 @@ the base image alone does not make that update or the binary build reproducible.
 host. `Cargo.lock` and the generated PKGBUILD source checksum identify the inputs.
 
 The result is named in `.tools/arch-package/PACKAGE-NAME`; for this release it is
-`ma-tui-0.9.3-1-x86_64.pkg.tar.zst`. Version, glibc requirement and install
+`ma-tui-1.0.0-1-x86_64.pkg.tar.zst`. Version, glibc requirement and install
 instructions are derived from the manifest and built executable. The desktop
 launcher is included and validated during package installation.
 Copy only a successfully verified package into ignored `dist/`, and create its

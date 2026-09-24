@@ -30,6 +30,8 @@ SOURCE_SHA256 = '6b452e4750590a2b5617adc40026f28d2f4903de15f1250e1d1c40bfd68ed55
 FINISH_ARGS = [
     '--command=ma-tui', '--share=network', '--socket=pulseaudio',
     '--talk-name=org.freedesktop.secrets',
+    '--own-name=org.mpris.MediaPlayer2.ma_tui',
+    '--talk-name=org.freedesktop.Notifications',
     '--filesystem=~/.local/state/omarchy/current:ro',
 ]
 

@@ -329,6 +329,29 @@ impl ApiClient {
         .await?;
         Ok(())
     }
+
+    /// Start a dynamic radio playlist seeded from this item.
+    pub async fn start_radio(&self, player_id: &str, uri: &str) -> Result<()> {
+        let queue = self.active_queue(player_id).await?;
+        // MA 2.10.2 deprecates `radio_mode` in favour of a radio playlist
+        // (queues.py:506-507); client_queues.py:25-35 defines this URI form.
+        let radio_uri = if uri.starts_with("radio_playlist://") {
+            std::borrow::Cow::Borrowed(uri)
+        } else {
+            std::borrow::Cow::Owned(format!("radio_playlist://playlist/{uri}"))
+        };
+        self.command(
+            "player_queues/play_media",
+            json!({
+                "queue_id":text(&queue,"queue_id"),
+                "media":radio_uri.as_ref(),
+                "option":"replace",
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Mark a library item played or unplayed. MA names the item itself rather
     /// than a URI, so the caller supplies its identity; the four required
     /// `ItemMapping` fields are enough for the server to resolve it.
@@ -342,6 +365,112 @@ impl ApiClient {
             ("music/mark_unplayed", json!({ "media_item": item }))
         };
         self.command(command, args).await?;
+        Ok(())
+    }
+
+    /// Set favourite state, resolving provider rows back to their library row.
+    pub async fn set_favorite(
+        &self,
+        uri: &str,
+        media_type: &str,
+        library_id: Option<&str>,
+        favorite: bool,
+    ) -> Result<()> {
+        if favorite {
+            self.command("music/favorites/add_item", json!({"item":uri}))
+                .await?;
+            return Ok(());
+        }
+        let library_id = match library_id.filter(|id| !id.is_empty()) {
+            Some(id) => std::borrow::Cow::Borrowed(id),
+            None => std::borrow::Cow::Owned(self.library_item_id(uri).await?),
+        };
+        self.command(
+            "music/favorites/remove_item",
+            json!({"media_type":media_type,"library_item_id":library_id.as_ref()}),
+        )
+        .await?;
+        Ok(())
+    }
+
+    // `music/item_by_uri` calls `get_item` (music.py:1088-1099), whose
+    // resolver prefers a library row when one exists (base.py:597-616).
+    async fn library_item_id(&self, uri: &str) -> Result<String> {
+        let item = self
+            .command("music/item_by_uri", json!({"uri":uri}))
+            .await?;
+        if item["provider"].as_str() != Some("library") {
+            return Err(anyhow!("This item is not in your library"));
+        }
+        item["item_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow!("This item is not in your library"))
+    }
+
+    /// Save an item so later library-only operations can address it.
+    pub async fn add_to_library(&self, uri: &str) -> Result<()> {
+        self.command("music/library/add_item", json!({"item":uri}))
+            .await?;
+        Ok(())
+    }
+
+    /// Load one bounded page; 500 editable playlists is enough for this picker.
+    pub async fn editable_playlists(&self) -> Result<Vec<crate::music::Media>> {
+        let playlists = self
+            .command(
+                "music/playlists/library_items",
+                json!({"limit":500,"offset":0,"order_by":"sort_name"}),
+            )
+            .await?;
+        let playlists = playlists
+            .as_array()
+            .ok_or_else(|| anyhow!("Invalid playlist listing"))?;
+        Ok(playlists
+            .iter()
+            .filter(|playlist| playlist["is_editable"].as_bool() == Some(true))
+            .map(|playlist| crate::music::Media::parse(playlist, "playlist"))
+            .collect())
+    }
+
+    /// Queue the server-side background task that appends this item.
+    pub async fn add_to_playlist(&self, playlist_id: &str, uri: &str) -> Result<()> {
+        self.command(
+            "music/playlists/add_playlist_tracks",
+            json!({"db_playlist_id":playlist_id,"uris":[uri]}),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Create a playlist and optionally seed its server-side add task.
+    pub async fn create_playlist(&self, name: &str, uri: Option<&str>) -> Result<()> {
+        let trimmed = name.trim();
+        let cleaned = if trimmed.chars().any(|character| character.is_control()) {
+            std::borrow::Cow::Owned(
+                trimmed
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .collect::<String>(),
+            )
+        } else {
+            std::borrow::Cow::Borrowed(trimmed)
+        };
+        let name = cleaned.trim();
+        if name.is_empty() || name.chars().count() > 200 {
+            return Err(anyhow!("Playlist name must be 1–200 characters"));
+        }
+        let playlist = self
+            .command("music/playlists/create_playlist", json!({"name":name}))
+            .await?;
+        let playlist_id = playlist["item_id"]
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| anyhow!("Playlist creation did not return an id"))?;
+        if let Some(uri) = uri {
+            self.add_to_playlist(playlist_id, uri).await?;
+        }
         Ok(())
     }
 

@@ -396,6 +396,170 @@ async fn play_explicitly_replaces_while_enqueue_adds() {
         );
     }
 }
+
+#[tokio::test]
+async fn favorites_add_by_uri() {
+    let (url, task) = server(vec![ok(Value::Null)]).await;
+    ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .set_favorite("provider://track/1", "track", None, true)
+        .await
+        .unwrap();
+    let requests = task.await.unwrap();
+    assert_eq!(requests[0]["command"], "music/favorites/add_item");
+    assert_eq!(requests[0]["args"], json!({"item":"provider://track/1"}));
+}
+
+#[tokio::test]
+async fn favorites_remove_uses_known_library_id() {
+    let (url, task) = server(vec![ok(Value::Null)]).await;
+    ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .set_favorite("library://track/42", "track", Some("42"), false)
+        .await
+        .unwrap();
+    let requests = task.await.unwrap();
+    assert_eq!(requests[0]["command"], "music/favorites/remove_item");
+    assert_eq!(
+        requests[0]["args"],
+        json!({"media_type":"track","library_item_id":"42"})
+    );
+}
+
+#[tokio::test]
+async fn favorites_remove_resolves_library_ids_and_refuses_provider_only_items() {
+    let (url, task) = server(vec![
+        ok(json!({"provider":"library","item_id":"42"})),
+        ok(Value::Null),
+    ])
+    .await;
+    ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .set_favorite("provider://track/1", "track", None, false)
+        .await
+        .unwrap();
+    let requests = task.await.unwrap();
+    assert_eq!(requests[0]["command"], "music/item_by_uri");
+    assert_eq!(requests[0]["args"], json!({"uri":"provider://track/1"}));
+    assert_eq!(requests[1]["command"], "music/favorites/remove_item");
+    assert_eq!(
+        requests[1]["args"],
+        json!({"media_type":"track","library_item_id":"42"})
+    );
+
+    let (url, task) = server(vec![ok(json!({"provider":"provider","item_id":"1"}))]).await;
+    let error = ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .set_favorite("provider://track/1", "track", None, false)
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "This item is not in your library");
+    assert_eq!(task.await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn add_to_library_uses_item_uri() {
+    let (url, task) = server(vec![ok(json!({"item_id":"42"}))]).await;
+    ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .add_to_library("provider://album/42")
+        .await
+        .unwrap();
+    let requests = task.await.unwrap();
+    assert_eq!(requests[0]["command"], "music/library/add_item");
+    assert_eq!(requests[0]["args"], json!({"item":"provider://album/42"}));
+}
+
+#[tokio::test]
+async fn start_radio_enqueues_a_dynamic_radio_playlist_on_the_active_queue() {
+    let (url, task) = server(vec![ok(json!({"queue_id":"leader"})), ok(Value::Null)]).await;
+    ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .start_radio("member", "library://track/1")
+        .await
+        .unwrap();
+    let requests = task.await.unwrap();
+    assert_eq!(requests[0]["command"], "player_queues/get_active_queue");
+    assert_eq!(requests[0]["args"], json!({"player_id":"member"}));
+    assert_eq!(requests[1]["command"], "player_queues/play_media");
+    assert_eq!(
+        requests[1]["args"],
+        json!({
+            "queue_id":"leader",
+            "media":"radio_playlist://playlist/library://track/1",
+            "option":"replace",
+        })
+    );
+}
+
+#[tokio::test]
+async fn editable_playlists_filter_noneditable_rows() {
+    let (url, task) = server(vec![ok(json!([
+        {
+            "item_id":"editable",
+            "provider":"library",
+            "uri":"library://playlist/editable",
+            "name":"Editable",
+            "media_type":"playlist",
+            "is_editable":true,
+        },
+        {
+            "item_id":"readonly",
+            "provider":"library",
+            "uri":"library://playlist/readonly",
+            "name":"Read-only",
+            "media_type":"playlist",
+            "is_editable":false,
+        },
+    ]))])
+    .await;
+    let playlists = ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .editable_playlists()
+        .await
+        .unwrap();
+    assert_eq!(playlists.len(), 1);
+    assert_eq!(playlists[0].id, "editable");
+    let requests = task.await.unwrap();
+    assert_eq!(requests[0]["command"], "music/playlists/library_items");
+    assert_eq!(
+        requests[0]["args"],
+        json!({"limit":500,"offset":0,"order_by":"sort_name"})
+    );
+}
+
+#[tokio::test]
+async fn create_playlist_seeds_the_created_library_playlist() {
+    let (url, task) = server(vec![ok(json!({"item_id":"new"})), ok(Value::Null)]).await;
+    ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .create_playlist("  New playlist  ", Some("library://track/1"))
+        .await
+        .unwrap();
+    let requests = task.await.unwrap();
+    assert_eq!(requests[0]["command"], "music/playlists/create_playlist");
+    assert_eq!(requests[0]["args"], json!({"name":"New playlist"}));
+    assert_eq!(
+        requests[1]["command"],
+        "music/playlists/add_playlist_tracks"
+    );
+    assert_eq!(
+        requests[1]["args"],
+        json!({"db_playlist_id":"new","uris":["library://track/1"]})
+    );
+}
+
+#[tokio::test]
+async fn create_playlist_rejects_blank_names_before_network() {
+    let (url, task) = server(vec![]).await;
+    let error = ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .create_playlist(" \n\t ", None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "Playlist name must be 1–200 characters");
+    assert!(task.await.unwrap().is_empty());
+}
 #[tokio::test]
 async fn redirects_are_not_followed_and_client_can_retry() {
     let (url, task) = server(vec![(307, "test-secret".into()), ok(json!([]))]).await;
@@ -522,8 +686,8 @@ fn ok(v: Value) -> (u16, String) {
 }
 
 #[tokio::test]
-async fn library_browse_paginates_and_preserves_favorite_filter() {
-    use ma_tui::music::{Kind, Target, PAGE_SIZE};
+async fn library_browse_paginates_and_preserves_query_order_and_favorite_filter() {
+    use ma_tui::music::{Kind, Order, Target, PAGE_SIZE};
     let rows:Vec<_>=(0..PAGE_SIZE).map(|i|json!({"item_id":i.to_string(),"provider":"library","media_type":"track","name":"Fixture","uri":format!("library://track/{i}")})).collect();
     let (url, task) = server(vec![ok(json!(rows)), ok(json!([]))]).await;
     let api = ApiClient::new(&url, "test-secret").unwrap();
@@ -531,24 +695,40 @@ async fn library_browse_paginates_and_preserves_favorite_filter() {
         kind: Kind::Tracks,
         offset: 0,
         favorite: true,
+        search: Some("Fixture".into()),
+        order: Order::MostPlayed,
     };
     let (items, next) = api.browse(&target).await.unwrap();
     assert_eq!(items.len(), 100);
     assert!(items[0].playable);
-    let (items, next) = api.browse(&next.unwrap()).await.unwrap();
+    let next = next.expect("a full page has a next target");
+    assert_eq!(
+        next,
+        Target::Library {
+            kind: Kind::Tracks,
+            offset: PAGE_SIZE,
+            favorite: true,
+            search: Some("Fixture".into()),
+            order: Order::MostPlayed,
+        }
+    );
+    let (items, next) = api.browse(&next).await.unwrap();
     assert!(items.is_empty());
     assert!(next.is_none());
     let calls = task.await.unwrap();
-    assert_eq!(calls[0]["command"], "music/tracks/library_items");
+    assert_eq!(
+        calls[0]["args"],
+        json!({"limit":100,"offset":0,"order_by":"play_count_desc","favorite":true,"search":"Fixture"})
+    );
     assert_eq!(
         calls[1]["args"],
-        json!({"limit":100,"offset":100,"order_by":"sort_name","favorite":true})
+        json!({"limit":100,"offset":100,"order_by":"play_count_desc","favorite":true,"search":"Fixture"})
     );
 }
 
 #[tokio::test]
 async fn browse_routes_collections_and_provider_folders_without_player_commands() {
-    use ma_tui::music::{Kind, Target};
+    use ma_tui::music::{Kind, Order, Target};
     let args = json!({"item_id":"fixture","provider_instance_id_or_domain":"provider"});
     for (target, command, expected) in [
         (
@@ -595,9 +775,16 @@ async fn browse_routes_collections_and_provider_folders_without_player_commands(
                 kind: Kind::Radio,
                 offset: 0,
                 favorite: false,
+                search: None,
+                order: Order::Name,
             },
             "music/radios/library_items",
             json!({"limit":100,"offset":0,"order_by":"sort_name","favorite":null}),
+        ),
+        (
+            Target::RecentlyPlayed,
+            "music/recently_played_items",
+            json!({"limit":50}),
         ),
     ] {
         let (url, task) = server(vec![ok(json!([]))]).await;

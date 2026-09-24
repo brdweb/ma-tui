@@ -1,8 +1,10 @@
 use ma_tui::{
     api::{Player, Queue},
     controller::Update,
+    controls::{InputKind, PromptTarget},
+    music::{Kind, Media, Order, Target},
     presentation::apply,
-    ui::{App, PlayerView},
+    ui::{Action, App, PlayerView, TrackView},
 };
 
 #[test]
@@ -125,4 +127,227 @@ fn a_position_event_applies_only_to_the_displayed_queue() {
         app.elapsed_at.is_some(),
         "the position carries on from what the server reported"
     );
+}
+
+#[test]
+fn media_events_update_mapped_browser_search_and_current_rows() {
+    let mut app = App::default();
+    app.music.page.items = vec![Media::parse(
+        &serde_json::json!({
+            "name":"Provider track",
+            "item_id":"provider-track",
+            "provider":"spotify--account",
+            "media_type":"track",
+            "uri":"spotify://track/provider-track",
+        }),
+        "",
+    )];
+    app.results = vec![TrackView {
+        media: Some(Media::parse(
+            &serde_json::json!({
+                "name":"Domain-mapped track",
+                "item_id":"provider-track",
+                "provider":"spotify",
+                "media_type":"track",
+                "uri":"spotify://track/domain-track",
+            }),
+            "",
+        )),
+        ..Default::default()
+    }];
+    app.queue_details = serde_json::json!({
+        "current_item": {
+            "media_item": {
+                "name":"Current provider track",
+                "item_id":"provider-track",
+                "provider":"spotify",
+                "media_type":"track",
+                "uri":"spotify://track/current-track",
+            }
+        }
+    });
+    let item = serde_json::json!({
+        "name":"Library track",
+        "item_id":"library-track",
+        "provider":"library",
+        "media_type":"track",
+        "uri":"library://track/library-track",
+        "favorite":true,
+        "provider_mappings":[
+            {
+                "item_id":"provider-track",
+                "provider_instance":"spotify--account",
+                "provider_domain":"spotify",
+            }
+        ],
+    });
+    assert_eq!(
+        apply(
+            &mut app,
+            Update::MediaItem {
+                uri: "library://track/library-track".into(),
+                item: Some(item),
+            },
+        ),
+        None
+    );
+    for media in [
+        &app.music.page.items[0],
+        app.results[0].media.as_ref().expect("search media"),
+    ] {
+        assert!(media.favorite);
+        assert!(media.in_library);
+    }
+    assert_eq!(
+        app.queue_details["current_item"]["media_item"]["favorite"], true,
+        "the F shortcut reads the event-updated queue item"
+    );
+
+    apply(
+        &mut app,
+        Update::MediaItem {
+            uri: "spotify://track/provider-track".into(),
+            item: None,
+        },
+    );
+    assert!(
+        !app.music.page.items[0].in_library,
+        "a deletion clears the direct row's library membership"
+    );
+}
+
+#[test]
+fn a_favorite_event_reloads_the_visible_favorites_listing() {
+    let target = Target::Library {
+        kind: Kind::Tracks,
+        offset: 0,
+        favorite: true,
+        search: None,
+        order: Order::Name,
+    };
+    let mut app = App::default();
+    app.music.page.target = target.clone();
+    app.music.page.items = vec![Media::parse(
+        &serde_json::json!({
+            "name":"Library track",
+            "item_id":"library-track",
+            "provider":"library",
+            "media_type":"track",
+            "uri":"library://track/library-track",
+            "favorite":false,
+        }),
+        "",
+    )];
+    assert_eq!(
+        apply(
+            &mut app,
+            Update::MediaItem {
+                uri: "library://track/library-track".into(),
+                item: Some(serde_json::json!({
+                    "name":"Library track",
+                    "item_id":"library-track",
+                    "provider":"library",
+                    "media_type":"track",
+                    "uri":"library://track/library-track",
+                    "favorite":true,
+                    "provider_mappings":[],
+                })),
+            },
+        ),
+        Some(Action::Browse {
+            generation: 1,
+            target,
+        })
+    );
+}
+
+#[test]
+fn playlist_updates_open_picker_or_report_the_failure() {
+    let playlist = |id, title| {
+        Media::parse(
+            &serde_json::json!({
+                "name":title,
+                "item_id":id,
+                "provider":"library",
+                "media_type":"playlist",
+                "uri":format!("library://playlist/{id}"),
+            }),
+            "playlist",
+        )
+    };
+    let mut app = App {
+        selected_id: Some("speaker".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        apply(
+            &mut app,
+            Update::Playlists {
+                uri: "library://track/1".into(),
+                result: Ok(vec![playlist("one", "Road trip"), playlist("two", "Work")]),
+            },
+        ),
+        None
+    );
+    let menu = app.menu.as_ref().expect("playlist picker");
+    assert_eq!(menu.title, "Add to playlist");
+    assert_eq!(menu.player.as_deref(), Some("speaker"));
+    assert_eq!(
+        menu.entries
+            .iter()
+            .map(|entry| (entry.section, entry.label.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("Playlists", "Road trip"),
+            ("Playlists", "Work"),
+            ("New", "New playlist…")
+        ]
+    );
+    assert!(matches!(
+        &menu.entries[0].action,
+        Action::AddToPlaylist { playlist_id, uri }
+            if playlist_id == "one" && uri == "library://track/1"
+    ));
+    assert!(matches!(
+        &menu.entries[1].action,
+        Action::AddToPlaylist { playlist_id, uri }
+            if playlist_id == "two" && uri == "library://track/1"
+    ));
+    assert!(matches!(
+        &menu.entries[2].action,
+        Action::Prompt(prompt)
+            if prompt.label == "New playlist name"
+                && prompt.kind == InputKind::Text
+                && prompt.value.is_empty()
+                && matches!(
+                    &prompt.target,
+                    PromptTarget::CreatePlaylist { uri: Some(uri) }
+                        if uri == "library://track/1"
+                )
+    ));
+    assert_eq!(
+        apply(
+            &mut app,
+            Update::Playlists {
+                uri: "library://track/1".into(),
+                result: Ok(vec![]),
+            },
+        ),
+        None
+    );
+    let empty = app.menu.as_ref().expect("new playlist entry");
+    assert_eq!(empty.entries.len(), 1);
+    assert_eq!(empty.entries[0].section, "New");
+    assert_eq!(empty.entries[0].label, "New playlist…");
+
+    let mut failed = App::default();
+    apply(
+        &mut failed,
+        Update::Playlists {
+            uri: "library://track/1".into(),
+            result: Err("permission denied".into()),
+        },
+    );
+    assert!(failed.menu.is_none());
+    assert_eq!(failed.status, "Could not load playlists: permission denied");
 }

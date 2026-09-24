@@ -1,7 +1,7 @@
-MA-TUI — PRE-1.0 RELEASE
+MA-TUI — 1.0 RELEASE
 
 MA-TUI is licensed under the MIT License; see the accompanying LICENSE file.
-This is a pre-1.0 release: complete for its stated scope, and not yet 1.0.
+This 1.0 release is complete for its stated scope; see Known limitations.
 Third-party software retains its own licenses; copies of shipped crate license
 and notice files, package license declarations, and Rust runtime copyright
 notices are in the accompanying third-party directory.

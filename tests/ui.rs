@@ -83,6 +83,80 @@ fn selects_available_player_and_routes_controls_only_when_connected() {
 }
 
 #[test]
+fn favorite_keys_work_without_a_speaker_or_selected_player() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    let media = ma_tui::music::Media::parse(
+        &serde_json::json!({
+            "name":"Library track",
+            "item_id":"library-track",
+            "provider":"library",
+            "media_type":"track",
+            "uri":"library://track/library-track",
+        }),
+        "",
+    );
+    let mut app = ui::App {
+        focus: ui::Focus::Music,
+        ..Default::default()
+    };
+    app.music.page.items = vec![media.clone()];
+    assert_eq!(
+        app.key(key(KeyCode::Char('f'))),
+        ui::Action::Favorite {
+            uri: "library://track/library-track".into(),
+            media_type: "track".into(),
+            library_id: Some("library-track".into()),
+            favorite: true,
+        }
+    );
+
+    app.focus = ui::Focus::Search;
+    app.results = vec![ui::TrackView {
+        media: Some(media),
+        ..Default::default()
+    }];
+    assert_eq!(
+        app.key(key(KeyCode::Char('f'))),
+        ui::Action::Favorite {
+            uri: "library://track/library-track".into(),
+            media_type: "track".into(),
+            library_id: Some("library-track".into()),
+            favorite: true,
+        }
+    );
+    assert_eq!(
+        app.key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL)),
+        ui::Action::None
+    );
+    assert!(app.menu.is_none(), "Ctrl-F never opens a favourite menu");
+
+    app.connected = true;
+    app.focus = ui::Focus::Queue;
+    app.queue_details = serde_json::json!({
+        "current_item": {
+            "media_item": {
+                "name":"Current track",
+                "item_id":"current-track",
+                "provider":"library",
+                "media_type":"track",
+                "uri":"library://track/current-track",
+                "favorite":true,
+            }
+        }
+    });
+    assert_eq!(
+        app.key(key(KeyCode::Char('F'))),
+        ui::Action::Favorite {
+            uri: "library://track/current-track".into(),
+            media_type: "track".into(),
+            library_id: Some("current-track".into()),
+            favorite: false,
+        }
+    );
+}
+
+#[test]
 fn search_typing_never_triggers_transport_or_quit() {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     let key = |c| KeyEvent::new(c, KeyModifiers::NONE);
@@ -100,7 +174,7 @@ fn search_typing_never_triggers_transport_or_quit() {
 
 #[test]
 fn renders_disconnected_and_small_terminal_without_panicking() {
-    for (width, height) in [(110, 32), (30, 8), (1, 1)] {
+    for (width, height) in [(110, 32), (50, 16), (30, 8), (1, 1)] {
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
         let mut app = ui::App::default();
@@ -112,12 +186,68 @@ fn renders_disconnected_and_small_terminal_without_panicking() {
             .iter()
             .map(|c| c.symbol())
             .collect();
-        if width > 50 {
+        if width >= 50 {
             assert!(text.contains("MA-TUI"));
+            assert!(text.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
             assert!(text.contains("Disconnected"));
             assert!(text.contains("No player selected"));
         }
     }
+}
+
+#[test]
+fn music_filter_and_library_title_show_navigation_state() {
+    use ma_tui::music::{Kind, Order, Target, PAGE_SIZE};
+
+    let mut app = ui::App {
+        focus: ui::Focus::Music,
+        content: ui::Focus::Music,
+        ..Default::default()
+    };
+    app.music.page.title = "Tracks".into();
+    app.music.page.target = Target::Library {
+        kind: Kind::Tracks,
+        offset: PAGE_SIZE,
+        favorite: false,
+        search: Some("ambient".into()),
+        order: Order::RecentlyAdded,
+    };
+    app.music.page.next = Some(Target::Library {
+        kind: Kind::Tracks,
+        offset: PAGE_SIZE * 2,
+        favorite: false,
+        search: Some("ambient".into()),
+        order: Order::RecentlyAdded,
+    });
+    app.music.filtering = true;
+    app.music.filter_input = "new filter".into();
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(220, 32)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("sort: recently added"));
+    assert!(text.contains("filter \"ambient\""));
+    assert!(text.contains("[ prev"));
+    assert!(text.contains("] next"));
+    assert!(text.contains("Filter: new filter"));
+
+    app.music.filtering = false;
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("[ ] page · o sort · ^F filter"));
+    assert!(text.contains("f fav"));
 }
 
 #[test]

@@ -128,7 +128,7 @@ impl Settings {
         ])
         .margin(1)
         .split(area);
-        frame.render_widget(Paragraph::new("MA-TUI · CONNECTION SETTINGS\nTab/Shift-Tab fields · Ctrl-U clear · Space toggles · Esc cancel"), rows[0]);
+        frame.render_widget(Paragraph::new(concat!("MA-TUI v", env!("CARGO_PKG_VERSION"), " · CONNECTION SETTINGS\nTab/Shift-Tab fields · Ctrl-U clear · Space toggles · Esc cancel")), rows[0]);
         let device = self
             .config
             .device_id

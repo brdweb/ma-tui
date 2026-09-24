@@ -30,10 +30,20 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Prompt {
     pub label: String,
-    pub command: Command,
-    pub argument: &'static str,
+    pub target: PromptTarget,
     pub value: String,
     pub kind: InputKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PromptTarget {
+    Command {
+        command: Command,
+        argument: &'static str,
+    },
+    CreatePlaylist {
+        uri: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,34 +53,57 @@ pub enum InputKind {
 }
 
 impl Prompt {
-    pub fn submit(&self) -> Result<Command, &'static str> {
-        let value = match self.kind {
-            InputKind::Text if self.value.trim().is_empty() => return Err("Enter a value"),
-            InputKind::Text => json!(self.value.trim()),
-            InputKind::Number { min, max, integer } => {
-                let n: f64 = self
-                    .value
-                    .trim()
-                    .parse()
-                    .map_err(|_| "Enter a number within the displayed range")?;
-                if !n.is_finite() || n < min || n > max || (integer && n.fract() != 0.0) {
-                    return Err("Enter a number within the displayed range");
+    fn needs_player(&self) -> bool {
+        matches!(&self.target, PromptTarget::Command { .. })
+    }
+
+    pub fn submit(&self) -> Result<Action, &'static str> {
+        match &self.target {
+            PromptTarget::CreatePlaylist { uri } => {
+                let name = self.value.trim();
+                if name.is_empty() {
+                    return Err("Enter a value");
                 }
-                if integer {
-                    json!(n as i64)
-                } else {
-                    json!(n)
+                if name.chars().count() > 200 {
+                    return Err("Playlist names cannot exceed 200 characters");
                 }
+                Ok(Action::CreatePlaylist {
+                    name: name.into(),
+                    uri: uri.clone(),
+                })
             }
-        };
-        let mut command = self.command.clone();
-        match &mut command {
-            Command::Player { args, .. } | Command::Queue { args, .. } => {
-                args[self.argument] = value
+            PromptTarget::Command { command, argument } => {
+                let value = match self.kind {
+                    InputKind::Text if self.value.trim().is_empty() => {
+                        return Err("Enter a value");
+                    }
+                    InputKind::Text => json!(self.value.trim()),
+                    InputKind::Number { min, max, integer } => {
+                        let n: f64 = self
+                            .value
+                            .trim()
+                            .parse()
+                            .map_err(|_| "Enter a number within the displayed range")?;
+                        if !n.is_finite() || n < min || n > max || (integer && n.fract() != 0.0) {
+                            return Err("Enter a number within the displayed range");
+                        }
+                        if integer {
+                            json!(n as i64)
+                        } else {
+                            json!(n)
+                        }
+                    }
+                };
+                let mut command = command.clone();
+                match &mut command {
+                    Command::Player { args, .. } | Command::Queue { args, .. } => {
+                        args[*argument] = value
+                    }
+                    _ => return Err("Invalid input action"),
+                }
+                Ok(Action::Command(command))
             }
-            _ => return Err("Invalid input action"),
         }
-        Ok(command)
     }
 }
 
@@ -83,8 +116,8 @@ pub struct Entry {
 }
 
 /// Headings in the order they are shown; entries keep their order within one.
-const SECTIONS: [&str; 8] = [
-    PLAYBACK, VOLUME, QUEUE, GROUPING, SOURCES, OPTIONS, SLEEP, MEDIA,
+const SECTIONS: [&str; 10] = [
+    PLAYBACK, VOLUME, QUEUE, GROUPING, SOURCES, OPTIONS, SLEEP, MEDIA, PLAYLISTS, NEW,
 ];
 const PLAYBACK: &str = "Playback";
 const VOLUME: &str = "Volume";
@@ -94,6 +127,8 @@ const SOURCES: &str = "Sources and sound modes";
 const OPTIONS: &str = "Player options";
 const SLEEP: &str = "Sleep timer";
 const MEDIA: &str = "Media by URI";
+const PLAYLISTS: &str = "Playlists";
+const NEW: &str = "New";
 
 pub struct Menu {
     pub prompt: Option<Prompt>,
@@ -397,6 +432,19 @@ impl Menu {
                 "clear",
                 json!({}),
             );
+            if !app.queue.is_empty() {
+                menu.input(
+                    QUEUE,
+                    "Save queue as playlist…".into(),
+                    Command::Queue {
+                        id: app.queue_id.clone(),
+                        name: "save_as_playlist",
+                        args: json!({}),
+                    },
+                    "name",
+                    InputKind::Text,
+                );
+            }
             if let Some(item) = app.queue.get(app.queue_cursor).filter(|t| !t.id.is_empty()) {
                 menu.queue_command(
                     QUEUE,
@@ -586,8 +634,7 @@ impl Menu {
     ) {
         let action = Action::Prompt(Prompt {
             label: label.clone(),
-            command,
-            argument,
+            target: PromptTarget::Command { command, argument },
             kind,
             value: String::new(),
         });
@@ -614,20 +661,29 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
                 menu.error.clear();
             }
             KeyCode::Enter => {
-                if !app.connected
-                    || menu.player != app.selected_id
-                    || !app
-                        .players
-                        .iter()
-                        .any(|p| p.available && Some(&p.id) == menu.player.as_ref())
-                {
-                    menu.error = "Player unavailable; cancel and reconnect".into();
+                let permitted = if prompt.needs_player() {
+                    app.connected
+                        && menu.player == app.selected_id
+                        && app
+                            .players
+                            .iter()
+                            .any(|p| p.available && Some(&p.id) == menu.player.as_ref())
+                } else {
+                    app.connected
+                };
+                if !permitted {
+                    menu.error = if prompt.needs_player() {
+                        "Player unavailable; cancel and reconnect"
+                    } else {
+                        "Server unavailable; cancel and reconnect"
+                    }
+                    .into();
                     return Action::None;
                 }
                 match prompt.submit() {
-                    Ok(command) => {
+                    Ok(action) => {
                         app.menu = None;
-                        return Action::Command(command);
+                        return action;
                     }
                     Err(error) => menu.error = error.into(),
                 }
@@ -690,7 +746,11 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
                 .unwrap_or(Action::None);
             // A library edit needs the server but no speaker; everything else
             // has to still be aimed at the player the menu was opened for.
-            let permitted = if chosen.needs_player() {
+            let needs_player = match &chosen {
+                Action::Prompt(prompt) => prompt.needs_player(),
+                _ => chosen.needs_player(),
+            };
+            let permitted = if needs_player {
                 app.connected
                     && menu.player == app.selected_id
                     && app

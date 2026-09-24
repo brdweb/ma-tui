@@ -16,6 +16,11 @@ pub enum Update {
     Stream(bool),
     /// Listening progress changed somewhere in the library.
     Playlog,
+    /// A library item changed on the server. `item` is None when it was deleted.
+    MediaItem {
+        uri: String,
+        item: Option<serde_json::Value>,
+    },
     /// The cover for what is playing, or none when there is not one.
     Artwork(Option<crate::artwork::Art>),
     Offline(String),
@@ -24,6 +29,11 @@ pub enum Update {
         u64,
         Result<(Vec<crate::music::Media>, Option<crate::music::Target>), String>,
     ),
+    /// Editable playlists for the picker, answering LoadPlaylists for `uri`.
+    Playlists {
+        uri: String,
+        result: Result<Vec<crate::music::Media>, String>,
+    },
     Notice(String),
 }
 
@@ -122,11 +132,12 @@ impl Controller {
             // The queue the last read was about, so an event for some other
             // player's queue costs nothing.
             let mut current: Option<String> = None;
-            // Reading the library must never delay a transport key, so browse
-            // and search run beside this loop. Only the newest of each matters:
-            // the interface discards stale replies by generation, so a superseded
-            // request is cancelled rather than left to finish unread.
-            let (mut browsing, mut searching) = (Pending::default(), Pending::default());
+            // Reading the library must never delay a transport key, so browse,
+            // search and playlist-picker reads run beside this loop. Only the
+            // newest of each matters: superseded requests are cancelled rather
+            // than left to finish unread.
+            let (mut browsing, mut searching, mut playlists) =
+                (Pending::default(), Pending::default(), Pending::default());
             // The cover only changes when the item does, so it is fetched then
             // rather than on every queue read.
             let (mut covering, mut cover) = (Pending::default(), String::new());
@@ -177,6 +188,13 @@ impl Controller {
                                 Event::Playlog => {
                                     if tx.send(Update::Playlog).await.is_err() { return; }
                                 }
+                                // Library events carry their full replacement, so no
+                                // snapshot read is needed to forward them.
+                                Event::MediaItem { uri, item } => {
+                                    if tx.send(Update::MediaItem { uri, item }).await.is_err() {
+                                        return;
+                                    }
+                                }
                             }
                             next = events.as_mut().and_then(|rx| rx.try_recv().ok());
                         }
@@ -184,7 +202,14 @@ impl Controller {
                     },
                     command = commands.recv() => {
                         let Some(command) = command else { break; };
-                        if command.issued.elapsed() > Duration::from_secs(3) && !matches!(command.action, Action::Browse {..} | Action::Search(_)) {
+                        if command.issued.elapsed() > Duration::from_secs(3)
+                            && !matches!(
+                                command.action,
+                                Action::Browse { .. }
+                                    | Action::Search(_)
+                                    | Action::LoadPlaylists { .. }
+                            )
+                        {
                             let _ = tx.send(Update::Notice("Command expired; press the key again".into())).await;
                             continue;
                         }
@@ -204,10 +229,19 @@ impl Controller {
                             }));
                             continue;
                         }
+                        if let Action::LoadPlaylists { uri } = command.action {
+                            let (api, tx) = (api.clone(), tx.clone());
+                            playlists.replace(tokio::spawn(async move {
+                                let result = api.editable_playlists().await.map_err(|e| e.to_string());
+                                let _ = tx.send(Update::Playlists { uri, result }).await;
+                            }));
+                            continue;
+                        }
                         if !matches!(command.action, Action::Refresh) {
                             let result = execute(&api,command).await;
                             let notice = match result {
-                                Ok(()) => "Command accepted; refreshing state".into(),
+                                Ok(Some(notice)) => notice.into(),
+                                Ok(None) => "Command accepted; refreshing state".into(),
                                 Err(e) => format!("Command failed (not retried): {e}"),
                             };
                             if tx.send(Update::Notice(notice)).await.is_err() { break; }
@@ -284,26 +318,61 @@ impl Controller {
     }
 }
 
-async fn execute(api: &ApiClient, request: Request) -> anyhow::Result<()> {
-    // A library edit is not about a speaker, so it is answered before one is
-    // required.
-    if let Action::MarkPlayed { item, played } = request.action {
-        return api.mark_played(item, played).await;
-    }
-    let player = request
-        .player
-        .ok_or_else(|| anyhow::anyhow!("No player selected"))?;
-    match request.action {
-        Action::Toggle => api.control(&player, Control::Toggle).await,
-        Action::Next => api.control(&player, Control::Next).await,
-        Action::Previous => api.control(&player, Control::Previous).await,
-        // The interface resolves the target position, so holding the key does
-        // not issue a queue request per keystroke.
-        Action::Seek(position) => api.control(&player, Control::Seek(position)).await,
-        Action::Play(uri) => api.play_uri(&player, &uri).await,
-        Action::Enqueue(uri) => api.enqueue_uri(&player, &uri).await,
-        Action::PlayNext(uri) => api.play_next_uri(&player, &uri).await,
-        Action::Command(command) => api.playback_command(&player, command).await,
-        _ => Ok(()),
+async fn execute(api: &ApiClient, request: Request) -> anyhow::Result<Option<&'static str>> {
+    let Request { player, action, .. } = request;
+    match action {
+        Action::MarkPlayed { item, played } => {
+            api.mark_played(item, played).await?;
+            Ok(None)
+        }
+        Action::Favorite {
+            uri,
+            media_type,
+            library_id,
+            favorite,
+        } => {
+            api.set_favorite(&uri, &media_type, library_id.as_deref(), favorite)
+                .await?;
+            Ok(Some(if favorite {
+                "Added to favourites"
+            } else {
+                "Removed from favourites"
+            }))
+        }
+        Action::AddToLibrary { uri } => {
+            api.add_to_library(&uri).await?;
+            Ok(Some("Added to library"))
+        }
+        Action::AddToPlaylist { playlist_id, uri } => {
+            api.add_to_playlist(&playlist_id, &uri).await?;
+            Ok(Some(
+                "Added to playlist (the server finishes adding in the background)",
+            ))
+        }
+        Action::CreatePlaylist { name, uri } => {
+            api.create_playlist(&name, uri.as_deref()).await?;
+            Ok(Some("Playlist created"))
+        }
+        action => {
+            let player = player.ok_or_else(|| anyhow::anyhow!("No player selected"))?;
+            match action {
+                Action::Toggle => api.control(&player, Control::Toggle).await?,
+                Action::Next => api.control(&player, Control::Next).await?,
+                Action::Previous => api.control(&player, Control::Previous).await?,
+                // The interface resolves the target position, so holding the key
+                // does not issue a queue request per keystroke.
+                Action::Seek(position) => api.control(&player, Control::Seek(position)).await?,
+                Action::Play(uri) => api.play_uri(&player, &uri).await?,
+                Action::Enqueue(uri) => api.enqueue_uri(&player, &uri).await?,
+                Action::PlayNext(uri) => api.play_next_uri(&player, &uri).await?,
+                Action::StartRadio(uri) => {
+                    api.start_radio(&player, &uri).await?;
+                    return Ok(Some("Radio started"));
+                }
+                Action::Command(command) => api.playback_command(&player, command).await?,
+                _ => {}
+            }
+            Ok(None)
+        }
     }
 }

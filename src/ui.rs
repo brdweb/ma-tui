@@ -38,13 +38,50 @@ pub enum Action {
         item: serde_json::Value,
         played: bool,
     },
+    /// Favourite or unfavourite an item. Adding names the item by URI;
+    /// removing needs its library id, which is known only for library rows.
+    /// A library edit, so it needs no speaker.
+    Favorite {
+        uri: String,
+        media_type: String,
+        library_id: Option<String>,
+        favorite: bool,
+    },
+    /// Save a provider item into the library. A library edit.
+    AddToLibrary {
+        uri: String,
+    },
+    /// Replace the queue with a radio station seeded from an item.
+    StartRadio(String),
+    /// Read the playlists this user can add to, for the playlist picker.
+    LoadPlaylists {
+        uri: String,
+    },
+    /// Append one item to an editable library playlist.
+    AddToPlaylist {
+        playlist_id: String,
+        uri: String,
+    },
+    /// Create a library playlist, seeded with one item when given.
+    CreatePlaylist {
+        name: String,
+        uri: Option<String>,
+    },
 }
 
 impl Action {
     /// Whether this is aimed at a speaker. A library edit is not: it changes
     /// what the server stores, so it stands on its own.
     pub fn needs_player(&self) -> bool {
-        !matches!(self, Action::MarkPlayed { .. })
+        !matches!(
+            self,
+            Action::MarkPlayed { .. }
+                | Action::Favorite { .. }
+                | Action::AddToLibrary { .. }
+                | Action::LoadPlaylists { .. }
+                | Action::AddToPlaylist { .. }
+                | Action::CreatePlaylist { .. }
+        )
     }
 }
 
@@ -139,6 +176,10 @@ impl App {
                     menu.error = "Paste exceeds this field's 2048-byte limit".into();
                 }
             }
+        } else if self.music.filtering {
+            if !append_paste(&mut self.music.filter_input, text, 128) {
+                self.status = "Paste exceeds the filter's 128-byte limit".into();
+            }
         } else if self.editing && !append_paste(&mut self.query, text, 256) {
             self.status = "Paste exceeds the search field's 256-byte limit".into();
         }
@@ -182,16 +223,25 @@ impl App {
             }
         }
         if self.focus == Focus::Search
-            && matches!(
+            && (matches!(
                 key.code,
                 KeyCode::Enter | KeyCode::Char('P') | KeyCode::Char('a') | KeyCode::Char('N')
-            )
+            ) || (key.code == KeyCode::Char('f') && key.modifiers.is_empty()))
         {
-            if let Some(media) = self
+            let media = self
                 .results
                 .get(self.search_cursor)
-                .and_then(|t| t.media.clone())
-            {
+                .and_then(|track| track.media.clone());
+            if key.code == KeyCode::Char('f') {
+                return media
+                    .as_ref()
+                    .and_then(|media| media.favorite_action())
+                    .unwrap_or_else(|| {
+                        self.status = "This item cannot be a favourite".into();
+                        Action::None
+                    });
+            }
+            if let Some(media) = media {
                 if key.code == KeyCode::Enter {
                     if let Some(target) = media.open.clone() {
                         self.focus = Focus::Music;
@@ -329,6 +379,16 @@ impl App {
                 }
             }
             KeyCode::Char('r') => Action::Refresh,
+            KeyCode::Char('F') if self.connected => {
+                let media = crate::music::Media::parse(
+                    &self.queue_details["current_item"]["media_item"],
+                    "track",
+                );
+                media.favorite_action().unwrap_or_else(|| {
+                    self.status = "Nothing playing to favourite".into();
+                    Action::None
+                })
+            }
             _ if !self.connected
                 || !self
                     .players
@@ -647,7 +707,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "  MA-TUI  ",
+                concat!("  MA-TUI v", env!("CARGO_PKG_VERSION"), "  "),
                 Style::default()
                     .fg(palette.background)
                     .bg(palette.accent)
@@ -715,6 +775,9 @@ fn hints(app: &App) -> &'static str {
     if app.menu.is_some() {
         return "Enter applies · / filter · Esc returns · the player keeps running";
     }
+    if app.music.filtering {
+        return "Enter applies filter · Esc cancels";
+    }
     if app.editing {
         return "Enter submits the search · Esc cancels";
     }
@@ -722,9 +785,9 @@ fn hints(app: &App) -> &'static str {
         Focus::Players => "Enter select speaker · ↑↓ move · Tab pane · b music · / search · F2 settings",
         Focus::Queue => "Enter play item · Delete remove · Shift-J/K move · Tab pane · b music",
         Focus::Music => {
-            "Enter open · P play collection · a add · N play next · Backspace back · ] page · r reload"
+            "Enter open · P play · a add · N next · f fav · Backspace · r reload · [ ] page · o sort · ^F filter"
         }
-        Focus::Search => "Enter play · a add · N play next · / new search · Esc back to music",
+        Focus::Search => "Enter play · a add · N play next · f fav · / new search · Esc back to music",
     }
 }
 
@@ -983,10 +1046,16 @@ fn track_items<'a>(
             } else {
                 String::new()
             };
-            let title = truncate(&track.title, title_width);
+            let marker = if track.media.as_ref().is_some_and(|media| media.favorite) {
+                " ♥"
+            } else {
+                ""
+            };
+            let title_text_width = title_width.saturating_sub(marker.chars().count());
+            let title = truncate(&track.title, title_text_width);
             ListItem::new(vec![
                 Line::from(vec![
-                    Span::raw(format!("{position}{title:<title_width$}")),
+                    Span::raw(format!("{position}{title:<title_text_width$}{marker}")),
                     Span::styled(
                         format!("{state:>state_width$}"),
                         Style::default().fg(if state == "PLAYING" {

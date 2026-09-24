@@ -1,7 +1,7 @@
 # Releases
 
-Releases require explicit user authorization. This tree targets `v0.9.3`;
-the previous release is `v0.9.2`.
+Releases require explicit user authorization. This tree targets `v1.0.0`;
+the previous release is `v0.9.3`.
 `v0.9.0` was the first as ma-tui. `v0.1.0-beta.2` was
 published as local-matui before the rename, and `v0.1.0-beta.1` under that same
 former name and withdrawn the same day; its tag and assets were deleted rather
@@ -51,6 +51,43 @@ does not have: `0.9.0` is used as is. The package is unsigned and no AUR or
 distribution-repository publication is implied. No service is deployed. The
 Flatpak application branch is `stable`; it was `beta` while the releases were,
 and a ref is not upgraded across branches.
+
+## 1.0.0 validation (2026-09-23)
+
+The release was prepared and tested locally, on a precommit candidate, before
+the release commit. GitHub publication uses the optimized executable built by
+the main-branch CI run, followed by package verification of that exact
+artifact, as for 0.9.3.
+
+- Formatting and strict Clippy passed; all ordinary Rust targets passed with
+  187 tests and 14 ignored. The optimized binary reports `ma-tui 1.0.0` and shows
+  `MA-TUI v1.0.0` in the header.
+- All five native terminal fixtures passed: quit, SIGTERM, connected controller
+  (now also favourite, sort, start radio, add to playlist and save queue), password
+  settings and token settings.
+- A throwaway session-bus fixture drove the native binary and the installed
+  Flatpak over MPRIS: identity, status, title/artists/album metadata and volume
+  read correctly; PlayPause, Next, Pause and Volume reached the fixture server;
+  the bus name was released on quit. The Flatpak's session-bus policy is limited
+  to owning `org.mpris.MediaPlayer2.ma_tui` and talking to
+  `org.freedesktop.Notifications` and `org.freedesktop.secrets`.
+- The staged build passed the disposable Arch container verification:
+  install, integrity, startup, PTY, HTTP fixtures and removal.
+- The Flatpak built by `packaging/flatpak/build.py` passed
+  `packaging/flatpak/verify.py` in the user installation: binary/helper
+  identity, version/demo/devices, native-config isolation, Omarchy theme
+  identity, a disposable real keyring round trip, quit/SIGTERM, the connected
+  controller fixture and the silent real default-output test.
+- RustSec `cargo audit` of the locked graph (403 crates, including the new zbus
+  dependencies) reported no advisories.
+- The user ran the Flatpak candidate against their Music Assistant server and
+  confirmed the new browsing, favourites, radio and playlist features. Media
+  keys were not exercised by hand (no media keys on the test keyboard); MPRIS
+  was verified over the session bus as above.
+
+Omapak builds its own Flatpak from the tagged source through its catalog
+recipe (`apps/io.github.brdweb.MaTui/` in outcrop-labs/omapak); the GitHub
+release bundle is not that build.
 
 ## 0.9.3 validation (2026-09-17)
 

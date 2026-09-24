@@ -54,6 +54,10 @@ pub struct Config {
     pub spectrum: Spectrum,
     /// Show album art, where the terminal and the server can both supply it.
     pub album_art: AlbumArt,
+    /// Expose playback to desktop media keys and bars over D-Bus.
+    pub mpris: bool,
+    /// Show a desktop notification when the playing track changes.
+    pub notifications: bool,
 }
 
 impl Default for Config {
@@ -68,6 +72,8 @@ impl Default for Config {
             volume: 50,
             spectrum: Spectrum::default(),
             album_art: AlbumArt::default(),
+            mpris: true,
+            notifications: false,
         }
     }
 }
