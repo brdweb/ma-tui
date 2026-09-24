@@ -75,6 +75,42 @@ fn only_events_this_application_acts_on_are_translated() {
     );
 }
 
+#[test]
+fn media_item_events_forward_full_items_and_ignore_empty_object_ids() {
+    let item = json!({
+        "item_id":"42",
+        "provider":"library",
+        "uri":"library://track/42",
+        "name":"Song",
+    });
+    for name in ["media_item_updated", "media_item_added"] {
+        assert_eq!(
+            translate(&json!({"event":name,"object_id":"library://track/42","data":item})),
+            Some(Event::MediaItem {
+                uri: "library://track/42".into(),
+                item: Some(item.clone()),
+            })
+        );
+    }
+    assert_eq!(
+        translate(&json!({"event":"media_item_deleted","object_id":"library://track/42"})),
+        Some(Event::MediaItem {
+            uri: "library://track/42".into(),
+            item: None,
+        })
+    );
+    for name in [
+        "media_item_updated",
+        "media_item_added",
+        "media_item_deleted",
+    ] {
+        assert_eq!(
+            translate(&json!({"event":name,"object_id":"","data":item})),
+            None
+        );
+    }
+}
+
 /// The real handshake: the server greets the connection before answering the
 /// auth command, so the stream has to read past its own greeting.
 #[tokio::test]

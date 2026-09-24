@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ma_tui::{
-    music::{Browser, Kind, Media, Target},
+    music::{Browser, Kind, Media, Order, Target, PAGE_SIZE},
     ui::{Action, App, Focus, PlayerView, TrackView},
 };
 use serde_json::json;
@@ -58,6 +58,15 @@ fn navigation_is_read_only_and_back_rejects_late_responses() {
         press(&mut app, KeyCode::Enter),
         Action::Browse {
             target: Target::RecentlyAdded,
+            ..
+        }
+    ));
+    press(&mut app, KeyCode::Backspace);
+    press(&mut app, KeyCode::Down);
+    assert!(matches!(
+        press(&mut app, KeyCode::Enter),
+        Action::Browse {
+            target: Target::RecentlyPlayed,
             ..
         }
     ));
@@ -134,7 +143,17 @@ fn unavailable_media_and_player_changes_cannot_submit_playback() {
     media.available = false;
     app.music.page.items = vec![media];
     assert_eq!(press(&mut app, KeyCode::Enter), Action::None);
-    assert!(app.menu.is_none());
+    let menu = app
+        .menu
+        .take()
+        .expect("unavailable media can still be edited in the library");
+    assert!(
+        !menu.entries.iter().any(|entry| matches!(
+            entry.action,
+            Action::Play(_) | Action::PlayNext(_) | Action::Enqueue(_)
+        )),
+        "an unavailable item offers no playback command"
+    );
     app.music.page.items = vec![track()];
     press(&mut app, KeyCode::Enter);
     app.connected = false;
@@ -175,6 +194,7 @@ fn folders_are_not_playable_and_terminal_controls_are_removed() {
     );
     assert_eq!(folder.title, "Folder");
     assert!(!folder.playable);
+    assert_eq!(folder.favorite_action(), None);
     assert_eq!(
         folder.open,
         Some(Target::Providers {
@@ -184,12 +204,179 @@ fn folders_are_not_playable_and_terminal_controls_are_removed() {
 }
 
 #[test]
+fn favorites_keep_library_identity_and_open_without_a_speaker() {
+    let library = Media::parse(
+        &json!({
+            "name":"Library track",
+            "item_id":"library-track",
+            "provider":"library",
+            "media_type":"track",
+            "uri":"library://track/library-track",
+            "favorite":true,
+        }),
+        "",
+    );
+    assert!(library.favorite);
+    assert!(library.in_library);
+    assert_eq!(
+        library.favorite_action(),
+        Some(Action::Favorite {
+            uri: "library://track/library-track".into(),
+            media_type: "track".into(),
+            library_id: Some("library-track".into()),
+            favorite: false,
+        })
+    );
+    assert_eq!(library.library_action(), None);
+
+    let provider = Media::parse(
+        &json!({
+            "name":"Provider track",
+            "item_id":"provider-track",
+            "provider":"spotify",
+            "media_type":"track",
+            "uri":"spotify://track/provider-track",
+        }),
+        "",
+    );
+    assert!(!provider.favorite);
+    assert!(!provider.in_library);
+    assert_eq!(
+        provider.favorite_action(),
+        Some(Action::Favorite {
+            uri: "spotify://track/provider-track".into(),
+            media_type: "track".into(),
+            library_id: None,
+            favorite: true,
+        })
+    );
+    assert_eq!(
+        provider.library_action(),
+        Some(Action::AddToLibrary {
+            uri: "spotify://track/provider-track".into(),
+        })
+    );
+
+    let folder = Media::folder("Folder", Target::Home);
+    assert!(!folder.favorite);
+    assert!(!folder.in_library);
+
+    let mut app = App::default();
+    assert_eq!(ma_tui::music::choose(&mut app, &provider), Action::None);
+    let menu = app
+        .menu
+        .as_ref()
+        .expect("library edits open without a speaker");
+    assert!(menu.player.is_none());
+    let labels: Vec<&str> = menu
+        .entries
+        .iter()
+        .map(|entry| entry.label.as_str())
+        .collect();
+    assert_eq!(
+        labels,
+        vec!["Add to favourites", "Add to library", "Add to playlist…"]
+    );
+}
+
+#[test]
+fn choose_offers_radio_and_playlist_actions_for_supported_media() {
+    let album = Media::parse(
+        &json!({"name":"Fixture album","item_id":"album1","provider":"library",
+                "media_type":"album","uri":"library://album/album1"}),
+        "",
+    );
+    let episode = Media::parse(
+        &json!({"name":"Fixture episode","item_id":"episode1","provider":"library",
+                "media_type":"podcast_episode","uri":"library://podcast_episode/episode1"}),
+        "",
+    );
+
+    let mut app = connected();
+    ma_tui::music::choose(&mut app, &track());
+    assert_eq!(
+        app.menu
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.label == "Start radio")
+            .map(|entry| entry.action.clone()),
+        Some(Action::StartRadio("library://track/1".into()))
+    );
+
+    let mut app = connected();
+    ma_tui::music::choose(&mut app, &album);
+    assert_eq!(
+        app.menu
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.label == "Start radio")
+            .map(|entry| entry.action.clone()),
+        Some(Action::StartRadio("library://album/album1".into()))
+    );
+
+    let mut app = connected();
+    ma_tui::music::choose(&mut app, &episode);
+    assert!(
+        !app.menu
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| entry.label == "Start radio"),
+        "podcast episodes are not radio seeds"
+    );
+
+    let mut app = App::default();
+    ma_tui::music::choose(&mut app, &track());
+    assert_eq!(
+        app.menu
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.label == "Add to playlist…")
+            .map(|entry| entry.action.clone()),
+        Some(Action::LoadPlaylists {
+            uri: "library://track/1".into(),
+        })
+    );
+
+    for media in [
+        album,
+        Media::parse(
+            &json!({"name":"Fixture artist","item_id":"artist1","provider":"library",
+                    "media_type":"artist","uri":"library://artist/artist1"}),
+            "",
+        ),
+    ] {
+        let mut app = App::default();
+        ma_tui::music::choose(&mut app, &media);
+        assert!(
+            !app.menu
+                .as_ref()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| entry.label == "Add to playlist…"),
+            "{} cannot be added to playlists",
+            media.kind
+        );
+    }
+}
+
+#[test]
 fn failed_listing_can_retry_and_pagination_back_restores_position() {
     let mut browser = Browser::default();
     let target = Target::Library {
         kind: Kind::Tracks,
         offset: 0,
         favorite: false,
+        search: None,
+        order: Order::Name,
     };
     browser.navigate(target.clone(), "Tracks".into());
     browser.apply(browser.generation, Err("Unavailable".into()));
@@ -200,6 +387,8 @@ fn failed_listing_can_retry_and_pagination_back_restores_position() {
         kind: Kind::Tracks,
         offset: 100,
         favorite: false,
+        search: None,
+        order: Order::Name,
     };
     browser.apply(
         browser.generation,
@@ -211,6 +400,244 @@ fn failed_listing_can_retry_and_pagination_back_restores_position() {
     assert_eq!(browser.page.target, target);
     assert_eq!(browser.page.cursor, 1);
     assert!(browser.error.is_empty());
+}
+
+#[test]
+fn page_back_uses_history_or_reloads_in_place() {
+    let mut app = App {
+        focus: Focus::Music,
+        ..Default::default()
+    };
+    let first = Target::Library {
+        kind: Kind::Tracks,
+        offset: 0,
+        favorite: true,
+        search: Some("ambient".into()),
+        order: Order::RecentlyAdded,
+    };
+    let second = Target::Library {
+        kind: Kind::Tracks,
+        offset: PAGE_SIZE,
+        favorite: true,
+        search: Some("ambient".into()),
+        order: Order::RecentlyAdded,
+    };
+    app.music.navigate(first.clone(), "Tracks".into());
+    app.music.apply(
+        app.music.generation,
+        Ok((vec![track()], Some(second.clone()))),
+    );
+    assert!(matches!(
+        press(&mut app, KeyCode::Char(']')),
+        Action::Browse { target, .. } if target == second
+    ));
+    app.music
+        .apply(app.music.generation, Ok((vec![track()], None)));
+
+    assert_eq!(press(&mut app, KeyCode::Char('[')), Action::None);
+    assert_eq!(app.music.page.target, first);
+    assert_eq!(
+        app.music.history.len(),
+        1,
+        "the cached first page was restored"
+    );
+    assert!(!app.music.loading);
+
+    app.music.history.clear();
+    app.music.page.target = second.clone();
+    app.music.page.title = "Tracks".into();
+    app.music.page.items = vec![track()];
+    app.music.page.next = None;
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('[')),
+        Action::Browse { target, .. } if target == first
+    ));
+    assert_eq!(app.music.page.target, first);
+    assert!(
+        app.music.history.is_empty(),
+        "reloading did not create history"
+    );
+    assert!(app.music.loading);
+
+    app.music
+        .apply(app.music.generation, Ok((vec![track()], None)));
+    assert_eq!(press(&mut app, KeyCode::Char('[')), Action::None);
+    assert_eq!(app.status, "Already on the first page");
+}
+
+#[test]
+fn sort_cycles_valid_orders_in_place() {
+    for (order, key) in [
+        (Order::Name, "sort_name"),
+        (Order::RecentlyAdded, "timestamp_added_desc"),
+        (Order::LastPlayed, "last_played_desc"),
+        (Order::MostPlayed, "play_count_desc"),
+        (Order::Year, "year_desc"),
+        (Order::Random, "random"),
+    ] {
+        assert_eq!(order.order_by(), key);
+    }
+    let mut app = App {
+        focus: Focus::Music,
+        ..Default::default()
+    };
+    app.music.page.target = Target::Library {
+        kind: Kind::Artists,
+        offset: PAGE_SIZE,
+        favorite: false,
+        search: Some("ambient".into()),
+        order: Order::Name,
+    };
+    app.music.page.title = "Artists".into();
+    let mut orders = Vec::new();
+    for _ in 0..5 {
+        let action = press(&mut app, KeyCode::Char('o'));
+        let Action::Browse {
+            target:
+                Target::Library {
+                    offset,
+                    search,
+                    order,
+                    ..
+                },
+            ..
+        } = action
+        else {
+            panic!("sort reloads the library");
+        };
+        assert_eq!(offset, 0);
+        assert_eq!(search.as_deref(), Some("ambient"));
+        orders.push(order);
+    }
+    assert_eq!(
+        orders,
+        vec![
+            Order::RecentlyAdded,
+            Order::LastPlayed,
+            Order::MostPlayed,
+            Order::Random,
+            Order::Name,
+        ]
+    );
+    assert_eq!(app.status, "sort: name");
+    assert!(
+        app.music.history.is_empty(),
+        "sorting does not create history"
+    );
+
+    app.music.page.target = Target::Library {
+        kind: Kind::Tracks,
+        offset: 0,
+        favorite: false,
+        search: None,
+        order: Order::MostPlayed,
+    };
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('o')),
+        Action::Browse {
+            target: Target::Library {
+                order: Order::Year,
+                ..
+            },
+            ..
+        }
+    ));
+    assert_eq!(app.status, "sort: year");
+}
+
+#[test]
+fn filter_input_replaces_library_page_and_cancels_without_change() {
+    let mut app = App {
+        focus: Focus::Music,
+        ..Default::default()
+    };
+    app.music.page.target = Target::Library {
+        kind: Kind::Albums,
+        offset: PAGE_SIZE,
+        favorite: false,
+        search: None,
+        order: Order::MostPlayed,
+    };
+    app.music.page.title = "Albums".into();
+    app.music.page.items = vec![track(), track()];
+    let ctrl_f = || KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+    assert_eq!(app.key(ctrl_f()), Action::None);
+    assert!(app.music.filtering);
+    for c in "new".chars() {
+        assert_eq!(press(&mut app, KeyCode::Char(c)), Action::None);
+    }
+    app.paste(" filter");
+    assert_eq!(app.music.filter_input, "new filter");
+    let generation = app.music.generation;
+    let cursor = app.music.page.cursor;
+    assert_eq!(press(&mut app, KeyCode::PageDown), Action::None);
+    assert_eq!(
+        app.music.generation, generation,
+        "filtering starts no reload"
+    );
+    assert_eq!(
+        app.music.page.cursor, cursor,
+        "filtering swallows pane navigation"
+    );
+
+    assert!(matches!(
+        press(&mut app, KeyCode::Enter),
+        Action::Browse {
+            target: Target::Library {
+                offset: 0,
+                search: Some(search),
+                order: Order::MostPlayed,
+                ..
+            },
+            ..
+        } if search == "new filter"
+    ));
+    let applied = app.music.page.target.clone();
+    assert!(!app.music.filtering);
+    assert!(app.music.filter_input.is_empty());
+    assert!(
+        app.music.history.is_empty(),
+        "filtering does not create history"
+    );
+
+    assert_eq!(app.key(ctrl_f()), Action::None);
+    assert_eq!(app.music.filter_input, "new filter");
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(press(&mut app, KeyCode::Esc), Action::None);
+    assert!(!app.music.filtering);
+    assert_eq!(app.music.page.target, applied);
+}
+
+#[test]
+fn recently_played_shelf_parses_item_mappings() {
+    let browser = Browser::default();
+    let shelf = browser
+        .page
+        .items
+        .iter()
+        .find(|item| item.title == "Recently played")
+        .expect("home has a recently played shelf");
+    assert_eq!(shelf.open, Some(Target::RecentlyPlayed));
+    assert_eq!(
+        ma_tui::music::demo_listing(&Target::RecentlyPlayed)[0].kind,
+        "track"
+    );
+
+    let item = Media::parse(
+        &json!({
+            "item_id":"track-1",
+            "provider":"library",
+            "name":"Played fixture",
+            "media_type":"track",
+            "uri":"library://track/track-1",
+        }),
+        "",
+    );
+    assert_eq!(item.id, "track-1");
+    assert_eq!(item.provider, "library");
+    assert_eq!(item.kind, "track");
+    assert_eq!(item.title, "Played fixture");
+    assert!(item.playable);
 }
 
 /// Podcasts open into episodes; audiobooks deliberately do not, because MA
@@ -304,7 +731,16 @@ fn progress_can_be_marked_without_a_speaker_selected() {
     let menu = app.menu.as_ref().expect("a progress menu still opens");
     assert!(menu.player.is_none());
     let labels: Vec<&str> = menu.entries.iter().map(|e| e.label.as_str()).collect();
-    assert_eq!(labels, vec!["Mark as played", "Mark as not played"]);
+    assert_eq!(
+        labels,
+        vec![
+            "Mark as played",
+            "Mark as not played",
+            "Add to favourites",
+            "Add to library",
+            "Add to playlist…",
+        ]
+    );
     assert_eq!(
         menu.entries[0].action,
         Action::MarkPlayed {
@@ -352,11 +788,21 @@ fn a_progress_event_refreshes_at_most_one_listing_at_a_time() {
             kind: Kind::Tracks,
             offset: 0,
             favorite: false,
+            search: None,
+            order: Order::Name,
         },
         "Tracks".into(),
     );
     browser.apply(browser.generation, Ok((vec![track()], None)));
     assert_eq!(browser.progress_changed(now), None);
+
+    let mut browser = Browser::default();
+    browser.navigate(Target::RecentlyPlayed, "Recently played".into());
+    browser.apply(browser.generation, Ok((vec![track()], None)));
+    assert!(
+        browser.progress_changed(now).is_some(),
+        "recently played follows listening activity"
+    );
 
     // A podcast listing does.
     let mut browser = Browser::default();

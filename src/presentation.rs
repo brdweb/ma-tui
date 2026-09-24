@@ -1,10 +1,30 @@
 use crate::{
     controller::Update,
-    ui::{App, PlayerView, TrackView},
+    controls::{Entry, InputKind, Menu, Prompt, PromptTarget},
+    music::{Media, Target},
+    ui::{Action, App, PlayerView, TrackView},
 };
 
 fn display(text: String) -> String {
     text.chars().filter(|c| !c.is_control()).take(512).collect()
+}
+
+/// A library event names its library URI, while rows may be provider mappings.
+fn matches_media(media: &Media, uri: &str, item: Option<&serde_json::Value>) -> bool {
+    (!uri.is_empty() && media.uri == uri)
+        || item
+            .and_then(|item| item["provider_mappings"].as_array())
+            .is_some_and(|mappings| {
+                !media.id.is_empty()
+                    && !media.provider.is_empty()
+                    && mappings.iter().any(|mapping| {
+                        mapping["item_id"].as_str() == Some(media.id.as_str())
+                            && (mapping["provider_instance"].as_str()
+                                == Some(media.provider.as_str())
+                                || mapping["provider_domain"].as_str()
+                                    == Some(media.provider.as_str()))
+                    })
+            })
 }
 
 /// MA can expose the embedded Sendspin endpoint behind a universal player.
@@ -127,6 +147,57 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                 app.status = error;
             }
         },
+        Update::MediaItem { uri, item } => {
+            let item = item.as_ref();
+            let showing_favorites = matches!(
+                &app.music.page.target,
+                Target::Library { favorite: true, .. }
+            );
+            let mut page_matched = false;
+            let mut page_favorite_changed = false;
+            for media in &mut app.music.page.items {
+                if !matches_media(media, &uri, item) {
+                    continue;
+                }
+                page_matched = true;
+                if let Some(item) = item {
+                    let favorite = item["favorite"] == true;
+                    page_favorite_changed |= media.favorite != favorite;
+                    media.favorite = favorite;
+                    media.in_library = true;
+                } else {
+                    media.in_library = false;
+                }
+            }
+            for result in &mut app.results {
+                let Some(media) = &mut result.media else {
+                    continue;
+                };
+                if !matches_media(media, &uri, item) {
+                    continue;
+                }
+                if let Some(item) = item {
+                    media.favorite = item["favorite"] == true;
+                    media.in_library = true;
+                } else {
+                    media.in_library = false;
+                }
+            }
+            if let Some(current) = app.queue_details.pointer_mut("/current_item/media_item") {
+                let media = Media::parse(current, "track");
+                if matches_media(&media, &uri, item) {
+                    if let Some(item) = item {
+                        current["favorite"] = serde_json::Value::Bool(item["favorite"] == true);
+                    }
+                }
+            }
+            if showing_favorites
+                && (page_favorite_changed
+                    || (!page_matched && item.is_some_and(|item| item["favorite"] == true)))
+            {
+                return Some(app.music.reload());
+            }
+        }
         Update::Stream(live) => app.live = live,
         Update::Artwork(art) => {
             app.artwork = art;
@@ -140,6 +211,51 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
         Update::Offline(error) => {
             app.connected = false;
             app.status = format!("Disconnected · data stale · retrying: {error}");
+        }
+        Update::Playlists { uri, result } => {
+            if app.settings.is_some() {
+                return None;
+            }
+            if app.menu.as_ref().is_some_and(|menu| menu.prompt.is_some()) {
+                app.status = "Playlists loaded; close the menu to choose".into();
+                return None;
+            }
+            match result {
+                Ok(playlists) => {
+                    let mut entries: Vec<Entry> = playlists
+                        .into_iter()
+                        .map(|playlist| Entry {
+                            section: "Playlists",
+                            label: playlist.title,
+                            action: Action::AddToPlaylist {
+                                playlist_id: playlist.id,
+                                uri: uri.clone(),
+                            },
+                        })
+                        .collect();
+                    entries.push(Entry {
+                        section: "New",
+                        label: "New playlist…".into(),
+                        action: Action::Prompt(Prompt {
+                            label: "New playlist name".into(),
+                            target: PromptTarget::CreatePlaylist { uri: Some(uri) },
+                            kind: InputKind::Text,
+                            value: String::new(),
+                        }),
+                    });
+                    app.menu = Some(Menu {
+                        player: app.selected_id.clone(),
+                        title: "Add to playlist".into(),
+                        entries,
+                        cursor: 0,
+                        prompt: None,
+                        error: String::new(),
+                        filter: String::new(),
+                        filtering: false,
+                    });
+                }
+                Err(error) => app.status = format!("Could not load playlists: {error}"),
+            }
         }
         Update::Notice(text) => app.status = text,
         Update::Playlog => {

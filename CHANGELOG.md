@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.0.0 — 2026-09-23
+
+First 1.0 release. The stated scope is complete and stable; the README's Known
+limitations still apply.
+
+### Desktop integration
+
+- Register `org.mpris.MediaPlayer2.ma_tui` on the session bus while connected,
+  so media keys, `playerctl` and compatible desktop bars can show and control
+  the selected player. `mpris = true` is the default; a second instance keeps
+  running without MPRIS if the name is already owned.
+- Add optional desktop track notifications. `notifications = false` remains the
+  default; when enabled, each new playing track replaces the prior notification.
+- Add Flatpak permissions to own the MPRIS name and talk to
+  `org.freedesktop.Notifications`, without granting full session-bus access.
+
+- Show the version in the interface header and settings title.
+
+### Favourites and library
+
+- Add `f` for the highlighted Music/Search item and `F` for the playing item to
+  toggle favourites, with a heart marker in listings. The item menu can also add
+  provider items to the library; Music Assistant makes favouriting a library add.
+- Add Favorite albums, artists, playlists and radio shelves after Favorite
+  tracks. Library and favourite listings update when the server reports media
+  item additions, changes or deletions.
+
+### Browsing
+
+- Add Recently played to Home, using up to 50 fully played items from Music
+  Assistant's play log.
+- Add previous-page `[` alongside `]`, sort cycling with `o`, and server-side
+  filtering of the current library listing with Ctrl-F.
+
+### Radio and playlists
+
+- Add **Start radio** to the item menu, replacing the selected queue with a
+  dynamic radio playlist seeded from a track, album, artist or playlist.
+- Add **Add to playlist…** with editable playlist selection or creation, and
+  **Save queue as playlist…** in the controls menu. Playlist additions run in
+  the background on Music Assistant.
+
 ## 0.9.3 — 2026-09-17
 
 - Recover from local audio output stream failures automatically, with up to

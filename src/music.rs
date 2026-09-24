@@ -1,4 +1,4 @@
-//! Read-only music navigation, kept separate from explicit playback actions.
+//! Music navigation, kept separate from explicit server actions.
 use crate::{
     api::ApiClient,
     ui::{Action, App, Focus},
@@ -23,6 +23,8 @@ pub enum Target {
         kind: Kind,
         offset: usize,
         favorite: bool,
+        search: Option<String>,
+        order: Order,
     },
     Album {
         id: String,
@@ -46,16 +48,27 @@ pub enum Target {
         id: String,
         provider: String,
     },
-    /// Started but unfinished, and newly added. The server keeps both lists, so
-    /// they stay current without the interface tracking anything itself.
+    /// Server-maintained shelves keep listening activity current without UI state.
     InProgress,
     RecentlyAdded,
+    RecentlyPlayed,
     /// Every episode not yet finished, across every subscribed show. This one
     /// the server does not keep: it has to be assembled here.
     UnplayedEpisodes,
     Providers {
         path: Option<String>,
     },
+}
+
+/// Server-supported library orders, so the browser never sends an invented key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Order {
+    Name,
+    RecentlyAdded,
+    LastPlayed,
+    MostPlayed,
+    Year,
+    Random,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +118,58 @@ impl Kind {
     }
 }
 
+impl Order {
+    const WITHOUT_YEAR: [Self; 5] = [
+        Self::Name,
+        Self::RecentlyAdded,
+        Self::LastPlayed,
+        Self::MostPlayed,
+        Self::Random,
+    ];
+    const WITH_YEAR: [Self; 6] = [
+        Self::Name,
+        Self::RecentlyAdded,
+        Self::LastPlayed,
+        Self::MostPlayed,
+        Self::Year,
+        Self::Random,
+    ];
+
+    /// The server's spelling stays beside the UI choices that select it.
+    pub fn order_by(self) -> &'static str {
+        match self {
+            Self::Name => "sort_name",
+            Self::RecentlyAdded => "timestamp_added_desc",
+            Self::LastPlayed => "last_played_desc",
+            Self::MostPlayed => "play_count_desc",
+            Self::Year => "year_desc",
+            Self::Random => "random",
+        }
+    }
+
+    /// A compact label leaves room for the active filter and page controls.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "name",
+            Self::RecentlyAdded => "recently added",
+            Self::LastPlayed => "last played",
+            Self::MostPlayed => "most played",
+            Self::Year => "year",
+            Self::Random => "random",
+        }
+    }
+
+    fn next(self, kind: Kind) -> Self {
+        let orders: &[Self] = if matches!(kind, Kind::Albums | Kind::Tracks) {
+            &Self::WITH_YEAR
+        } else {
+            &Self::WITHOUT_YEAR
+        };
+        let index = orders.iter().position(|order| *order == self).unwrap_or(0);
+        orders[(index + 1) % orders.len()]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Media {
     pub title: String,
@@ -114,6 +179,9 @@ pub struct Media {
     /// Library identity, kept so an item can be named back to the server.
     pub id: String,
     pub provider: String,
+    pub favorite: bool,
+    /// Whether this row is the server's library copy rather than a provider mapping.
+    pub in_library: bool,
     pub playable: bool,
     pub available: bool,
     /// Listening progress, for the media types that report it.
@@ -130,6 +198,8 @@ impl Media {
             kind: "folder".into(),
             id: String::new(),
             provider: String::new(),
+            favorite: false,
+            in_library: false,
             playable: false,
             available: true,
             fully_played: false,
@@ -141,6 +211,7 @@ impl Media {
         let value = |key: &str| v[key].as_str().unwrap_or_default().to_owned();
         let id = value("item_id");
         let provider = value("provider");
+        let in_library = provider == "library";
         let kind = v["media_type"].as_str().unwrap_or(hint).to_owned();
         let uri = value("uri");
         let open = if kind == "folder" {
@@ -188,6 +259,8 @@ impl Media {
             kind: kind.clone(),
             id,
             provider,
+            favorite: v["favorite"] == true,
+            in_library,
             available: v["available"] != false,
             playable: !uri.is_empty()
                 && v["is_playable"].as_bool().unwrap_or(matches!(
@@ -218,6 +291,39 @@ impl Media {
                 "name": self.title,
                 "media_type": self.kind,
             })
+        })
+    }
+
+    /// Favourites and library saves share the persistable Music Assistant kinds.
+    fn library_editable(&self) -> bool {
+        !self.uri.is_empty()
+            && matches!(
+                self.kind.as_str(),
+                "track"
+                    | "album"
+                    | "artist"
+                    | "playlist"
+                    | "radio"
+                    | "audiobook"
+                    | "podcast"
+                    | "podcast_episode"
+            )
+    }
+
+    /// Toggle this item's favourite state using the identity MA expects.
+    pub fn favorite_action(&self) -> Option<Action> {
+        self.library_editable().then(|| Action::Favorite {
+            uri: self.uri.clone(),
+            media_type: self.kind.clone(),
+            library_id: self.in_library.then(|| self.id.clone()),
+            favorite: !self.favorite,
+        })
+    }
+
+    /// Save a provider item before offering library-only edits for it.
+    pub fn library_action(&self) -> Option<Action> {
+        (!self.in_library && self.library_editable()).then(|| Action::AddToLibrary {
+            uri: self.uri.clone(),
         })
     }
 
@@ -252,7 +358,14 @@ pub fn demo_listing(target: &Target) -> Vec<Media> {
         Target::Library { kind, .. } => kind.media_type(),
         Target::Artist { .. } => "album",
         Target::Providers { .. } => "playlist",
-        _ => "track",
+        Target::Album { .. }
+        | Target::Playlist { .. }
+        | Target::ArtistTracks { .. }
+        | Target::Podcast { .. }
+        | Target::InProgress
+        | Target::RecentlyAdded
+        | Target::RecentlyPlayed
+        | Target::UnplayedEpisodes => "track",
     };
     vec![Media::parse(
         &json!({"name":format!("Sample {kind} — offline preview"),"item_id":"sample","provider":"demo","uri":format!("demo://{kind}/sample"),"media_type":kind,"artists":[{"name":"Fictional artist"}]}),
@@ -275,6 +388,7 @@ impl Default for Page {
             Media::folder("Continue listening", Target::InProgress),
             Media::folder("Unplayed podcasts", Target::UnplayedEpisodes),
             Media::folder("Recently added", Target::RecentlyAdded),
+            Media::folder("Recently played", Target::RecentlyPlayed),
         ];
         for kind in [
             Kind::Playlists,
@@ -291,6 +405,8 @@ impl Default for Page {
                     kind,
                     offset: 0,
                     favorite: false,
+                    search: None,
+                    order: Order::Name,
                 },
             ));
         }
@@ -300,6 +416,48 @@ impl Default for Page {
                 kind: Kind::Tracks,
                 offset: 0,
                 favorite: true,
+                search: None,
+                order: Order::Name,
+            },
+        ));
+        items.push(Media::folder(
+            "Favorite albums",
+            Target::Library {
+                kind: Kind::Albums,
+                offset: 0,
+                favorite: true,
+                search: None,
+                order: Order::Name,
+            },
+        ));
+        items.push(Media::folder(
+            "Favorite artists",
+            Target::Library {
+                kind: Kind::Artists,
+                offset: 0,
+                favorite: true,
+                search: None,
+                order: Order::Name,
+            },
+        ));
+        items.push(Media::folder(
+            "Favorite playlists",
+            Target::Library {
+                kind: Kind::Playlists,
+                offset: 0,
+                favorite: true,
+                search: None,
+                order: Order::Name,
+            },
+        ));
+        items.push(Media::folder(
+            "Favorite radio",
+            Target::Library {
+                kind: Kind::Radio,
+                offset: 0,
+                favorite: true,
+                search: None,
+                order: Order::Name,
             },
         ));
         items.push(Media::folder(
@@ -323,6 +481,9 @@ pub struct Browser {
     pub generation: u64,
     pub loading: bool,
     pub error: String,
+    /// The input stays here so a browser filter cannot leak into global search.
+    pub filtering: bool,
+    pub filter_input: String,
     /// When progress was last re-read, so a playing audiobook's steady stream
     /// of playlog updates cannot turn into a steady stream of requests.
     refreshed: Option<std::time::Instant>,
@@ -333,6 +494,7 @@ impl Browser {
         matches!(
             self.page.target,
             Target::InProgress
+                | Target::RecentlyPlayed
                 | Target::UnplayedEpisodes
                 | Target::Podcast { .. }
                 | Target::Library {
@@ -361,6 +523,18 @@ impl Browser {
             self.history.remove(0);
         }
         self.history.push(self.page.clone());
+        self.page = Page {
+            target,
+            title,
+            items: vec![],
+            cursor: 0,
+            next: None,
+        };
+        self.reload()
+    }
+    /// Replace the visible page when its listing controls change, not its path.
+    pub fn replace(&mut self, target: Target) -> Action {
+        let title = std::mem::take(&mut self.page.title);
         self.page = Page {
             target,
             title,
@@ -506,11 +680,24 @@ impl ApiClient {
                 kind,
                 offset,
                 favorite,
-            } => (
-                format!("music/{}/library_items", kind.endpoint()),
-                json!({"limit":PAGE_SIZE,"offset":offset,"order_by":"sort_name","favorite":if *favorite {Some(true)} else {None}}),
-                kind.media_type(),
-            ),
+                search,
+                order,
+            } => {
+                let mut args = json!({
+                    "limit":PAGE_SIZE,
+                    "offset":offset,
+                    "order_by":order.order_by(),
+                    "favorite":if *favorite {Some(true)} else {None}
+                });
+                if let Some(search) = search {
+                    args["search"] = Value::String(search.clone());
+                }
+                (
+                    format!("music/{}/library_items", kind.endpoint()),
+                    args,
+                    kind.media_type(),
+                )
+            }
             Target::Album { id, provider } => (
                 "music/albums/album_tracks".into(),
                 json!({"item_id":id,"provider_instance_id_or_domain":provider}),
@@ -536,7 +723,7 @@ impl ApiClient {
                 json!({"item_id":id,"provider_instance_id_or_domain":provider}),
                 "podcast_episode",
             ),
-            // Neither takes an offset: these are shelves, not paged libraries.
+            // Shelves are server-defined lists, not paged libraries.
             Target::InProgress => (
                 "music/in_progress_items".into(),
                 json!({ "limit": PAGE_SIZE }),
@@ -546,6 +733,11 @@ impl ApiClient {
                 "music/recently_added_tracks".into(),
                 json!({ "limit": PAGE_SIZE }),
                 "track",
+            ),
+            Target::RecentlyPlayed => (
+                "music/recently_played_items".into(),
+                json!({ "limit": 50 }),
+                "",
             ),
             Target::Providers { path } => ("music/browse".into(), json!({"path":path}), ""),
         };
@@ -571,10 +763,14 @@ impl ApiClient {
                 kind,
                 offset,
                 favorite,
+                search,
+                order,
             } if rows.len() == PAGE_SIZE => Some(Target::Library {
                 kind: *kind,
                 offset: offset + PAGE_SIZE,
                 favorite: *favorite,
+                search: search.clone(),
+                order: *order,
             }),
             _ => None,
         };
@@ -602,6 +798,16 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
                 action,
             }),
         );
+        if matches!(
+            media.kind.as_str(),
+            "track" | "album" | "artist" | "playlist"
+        ) {
+            entries.push(crate::controls::Entry {
+                section: "Play this item",
+                label: "Start radio".into(),
+                action: Action::StartRadio(media.uri.clone()),
+            });
+        }
     }
     // Progress is a library fact, not a playback one, so it needs no speaker.
     if media.tracks_progress() {
@@ -619,6 +825,40 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
                     }),
             );
         }
+    }
+    // Library edits are server state, independent of a selected speaker.
+    if let Some(action) = media.favorite_action() {
+        let label = if media.favorite {
+            "Remove from favourites"
+        } else {
+            "Add to favourites"
+        };
+        entries.push(crate::controls::Entry {
+            section: "Library",
+            label: label.into(),
+            action,
+        });
+    }
+    if let Some(action) = media.library_action() {
+        entries.push(crate::controls::Entry {
+            section: "Library",
+            label: "Add to library".into(),
+            action,
+        });
+    }
+    if !media.uri.is_empty()
+        && matches!(
+            media.kind.as_str(),
+            "track" | "radio" | "podcast_episode" | "audiobook"
+        )
+    {
+        entries.push(crate::controls::Entry {
+            section: "Library",
+            label: "Add to playlist…".into(),
+            action: Action::LoadPlaylists {
+                uri: media.uri.clone(),
+            },
+        });
     }
     if entries.is_empty() {
         app.status = if player.is_none() {
@@ -645,12 +885,115 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
 }
 
 pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
+    use crossterm::event::KeyModifiers;
+
+    if app.music.filtering {
+        match key.code {
+            KeyCode::Esc => {
+                app.music.filtering = false;
+                app.music.filter_input.clear();
+            }
+            KeyCode::Enter => {
+                let search = app.music.filter_input.trim().to_owned();
+                app.music.filtering = false;
+                app.music.filter_input.clear();
+                let target = match app.music.page.target.clone() {
+                    Target::Library {
+                        kind,
+                        favorite,
+                        order,
+                        ..
+                    } => Target::Library {
+                        kind,
+                        offset: 0,
+                        favorite,
+                        search: (!search.is_empty()).then_some(search),
+                        order,
+                    },
+                    _ => return Some(Action::None),
+                };
+                return Some(app.music.replace(target));
+            }
+            KeyCode::Backspace => {
+                app.music.filter_input.pop();
+            }
+            KeyCode::Char(c)
+                if !c.is_control()
+                    && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && app.music.filter_input.len() + c.len_utf8() <= 128 =>
+            {
+                app.music.filter_input.push(c);
+            }
+            _ => {}
+        }
+        return Some(Action::None);
+    }
+
     match key.code {
         KeyCode::Backspace => {
             app.music.back();
             Some(Action::None)
         }
+        KeyCode::Char('f') | KeyCode::Char('F')
+            if key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            let filter_input = match &app.music.page.target {
+                Target::Library { search, .. } => search.clone().unwrap_or_default(),
+                _ => return None,
+            };
+            app.music.filter_input = filter_input;
+            app.music.filtering = true;
+            Some(Action::None)
+        }
+        KeyCode::Char('f') if key.modifiers.is_empty() => {
+            let action = app
+                .music
+                .page
+                .items
+                .get(app.music.page.cursor)
+                .and_then(Media::favorite_action);
+            Some(action.unwrap_or_else(|| {
+                app.status = "This item cannot be a favourite".into();
+                Action::None
+            }))
+        }
         KeyCode::Char('r') => Some(app.music.reload()),
+        KeyCode::Char('[') => {
+            if app.music.loading {
+                return Some(Action::None);
+            }
+            let previous = match app.music.page.target.clone() {
+                Target::Library {
+                    kind,
+                    offset,
+                    favorite,
+                    search,
+                    order,
+                } if offset >= PAGE_SIZE => Target::Library {
+                    kind,
+                    offset: offset - PAGE_SIZE,
+                    favorite,
+                    search,
+                    order,
+                },
+                Target::Library { .. } => {
+                    app.status = "Already on the first page".into();
+                    return Some(Action::None);
+                }
+                _ => return None,
+            };
+            if app
+                .music
+                .history
+                .last()
+                .is_some_and(|page| page.target == previous)
+            {
+                app.music.back();
+                Some(Action::None)
+            } else {
+                Some(app.music.replace(previous))
+            }
+        }
         KeyCode::Char(']') => {
             if app.music.loading {
                 return Some(Action::None);
@@ -660,6 +1003,29 @@ pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
             } else {
                 Action::None
             })
+        }
+        KeyCode::Char('o') => {
+            let target = match app.music.page.target.clone() {
+                Target::Library {
+                    kind,
+                    favorite,
+                    search,
+                    order,
+                    ..
+                } => {
+                    let order = order.next(kind);
+                    app.status = format!("sort: {}", order.label());
+                    Target::Library {
+                        kind,
+                        offset: 0,
+                        favorite,
+                        search,
+                        order,
+                    }
+                }
+                _ => return None,
+            };
+            Some(app.music.replace(target))
         }
         KeyCode::Enter | KeyCode::Char('P') | KeyCode::Char('a') | KeyCode::Char('N') => {
             if app.music.loading {
@@ -703,25 +1069,52 @@ pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let browser = &app.music;
     let palette = app.palette;
-    let paging = match browser.page.target {
-        Target::Library { offset, .. } => format!(
-            " · page {}{}",
-            offset / PAGE_SIZE + 1,
-            if browser.page.next.is_some() {
-                " · ] next"
-            } else {
-                ""
-            }
-        ),
+    let library = match &browser.page.target {
+        Target::Library {
+            offset,
+            search,
+            order,
+            ..
+        } => {
+            let filter = search.as_ref().map_or_else(String::new, |search| {
+                format!(" · filter \"{}\"", clean(search))
+            });
+            format!(
+                " · page {}{}{} · sort: {}{}",
+                *offset / PAGE_SIZE + 1,
+                if *offset >= PAGE_SIZE {
+                    " · [ prev"
+                } else {
+                    ""
+                },
+                if browser.page.next.is_some() {
+                    " · ] next"
+                } else {
+                    ""
+                },
+                order.label(),
+                filter,
+            )
+        }
         _ => String::new(),
     };
     let area = crate::ui::heading(
         frame,
         area,
         palette,
-        &format!("MUSIC · {}{}", browser.page.title, paging),
+        &format!("MUSIC · {}{}", browser.page.title, library),
         app.focus == Focus::Music,
     );
+    if browser.filtering {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "Filter: {}▏  [Enter apply · Esc cancel]",
+                browser.filter_input
+            )),
+            area,
+        );
+        return;
+    }
     if browser.loading || !browser.error.is_empty() || browser.page.items.is_empty() {
         let message = if browser.loading {
             "Loading music…"
@@ -736,9 +1129,10 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let items = browser.page.items.iter().map(|m| {
         ListItem::new(vec![
             Line::from(format!(
-                "{} {}{}",
+                "{} {}{}{}",
                 if m.open.is_some() { "›" } else { "♪" },
                 m.title,
+                if m.favorite { " ♥" } else { "" },
                 if m.available { "" } else { " [unavailable]" }
             )),
             Line::styled(

@@ -44,18 +44,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
             assert req["args"] == {"media_item":{"item_id":"ep1","provider":"abs","name":"Fixture episode",
                                                  "media_type":"podcast_episode"},"fully_played":True}
             body = None
+        elif cmd == "music/favorites/add_item":
+            assert req["args"] == {"item":"library://playlist/playlist1"}
+            body = None
         elif cmd == "music/playlists/library_items":
-            assert req["args"] == {"limit":100,"offset":0,"order_by":"sort_name","favorite":None}
-            body = [{"name":"Fixture playlist","item_id":"playlist1","provider":"library","media_type":"playlist","uri":"library://playlist/playlist1"}]
+            if req["args"] == {"limit":500,"offset":0,"order_by":"sort_name"}:
+                body = [{"name":"Editable fixture","item_id":"pl9","provider":"library","media_type":"playlist",
+                         "uri":"library://playlist/pl9","is_editable":True},
+                        {"name":"Locked fixture","item_id":"pl8","provider":"spotify","media_type":"playlist",
+                         "uri":"spotify://playlist/pl8","is_editable":False}]
+            else:
+                default_args = {"limit":100,"offset":0,"order_by":"sort_name","favorite":None}
+                playlist_calls = [call for call in calls if call["command"] == cmd]
+                if len(playlist_calls) == 1:
+                    assert req["args"] == default_args
+                else:
+                    assert req["args"] in (
+                        default_args,
+                        {"limit":100,"offset":0,"order_by":"timestamp_added_desc","favorite":None},
+                    )
+                body = [{"name":"Fixture playlist","item_id":"playlist1","provider":"library","media_type":"playlist","uri":"library://playlist/playlist1"}]
         elif cmd == "music/playlists/playlist_tracks":
             assert req["args"] == {"item_id":"playlist1","provider_instance_id_or_domain":"library"}
             body = [{"name":"Browse fixture track","uri":"library://track/browsed","media_type":"track"}]
+        elif cmd == "music/playlists/add_playlist_tracks":
+            assert req["args"] == {"db_playlist_id":"pl9","uris":["library://track/browsed"]}
+            body = {}
         elif cmd == "players/cmd/stop":
             assert req["args"] == {"player_id":"member"}
             body = None
         else:
-            assert cmd in ("player_queues/play_pause", "player_queues/play_media", "player_queues/delete_item"), cmd
+            assert cmd in ("player_queues/play_pause", "player_queues/play_media", "player_queues/delete_item", "player_queues/save_as_playlist"), cmd
             assert req["args"]["queue_id"] == "leader"
+            if cmd == "player_queues/save_as_playlist":
+                assert req["args"]["name"] == "Smoke list"
             body = None
         data = json.dumps(body).encode()
         self.send_response(200)
@@ -102,9 +124,15 @@ with tempfile.TemporaryDirectory(prefix="ma-tui-smoke-") as tmp:
         os.write(master,b"\r")
         until(lambda:any(c["command"]=="music/mark_played" for c in calls))
         os.write(master,b"\x7f")  # Back to the music home listing.
-        # Past the three shelves to Playlists, and open it.
-        os.write(master,b"\x1b[B\x1b[B\x1b[B\r")
+        # Past the four shelves to Playlists, sort it, and keep browsing it.
+        os.write(master,b"\x1b[B\x1b[B\x1b[B\x1b[B\r")
         visible("Fixture playlist")
+        os.write(master,b"o")
+        until(lambda:any(c["command"]=="music/playlists/library_items" and c["args"].get("order_by")=="timestamp_added_desc" for c in calls))
+        visible("sort: recently added")
+        visible("Fixture playlist")
+        os.write(master,b"f")
+        until(lambda:any(c["command"]=="music/favorites/add_item" for c in calls))
         assert not any(c["command"].startswith("player_queues/") for c in calls), "browsing must work before speaker selection"
         os.write(master,b"\x7f\x1b[Z")  # Back to music home, Shift-Tab to Players.
         os.write(master,b"\r")
@@ -119,6 +147,19 @@ with tempfile.TemporaryDirectory(prefix="ma-tui-smoke-") as tmp:
             visible("Fixture speaker")
             os.write(master,b"j"*index+b"\r")
             until(lambda:any(c["command"]=="player_queues/play_media" and c["args"].get("media")=="library://track/browsed" and c["args"]["option"]==option for c in calls))
+        os.write(master,b"\r")
+        visible("Start radio")
+        os.write(master,b"jjj\r")
+        until(lambda:any(c["command"]=="player_queues/play_media" and c["args"] == {"queue_id":"leader","media":"radio_playlist://playlist/library://track/browsed","option":"replace"} for c in calls))
+        os.write(master,b"\r")
+        visible("Add to playlist…")
+        os.write(master,b"/playlist")
+        visible("Add to playlist…")
+        os.write(master,b"\r")
+        until(lambda:any(c["command"]=="music/playlists/library_items" and c["args"] == {"limit":500,"offset":0,"order_by":"sort_name"} for c in calls))
+        until(lambda:"Editable fixture" in "\n".join(screen.display) and "Locked fixture" not in "\n".join(screen.display))
+        os.write(master,b"\r")
+        until(lambda:any(c["command"]=="music/playlists/add_playlist_tracks" and c["args"] == {"db_playlist_id":"pl9","uris":["library://track/browsed"]} for c in calls))
         os.write(master,b"\x7fP")
         visible("Play now (replace queue)")
         os.write(master,b"jj\r")
@@ -137,6 +178,14 @@ with tempfile.TemporaryDirectory(prefix="ma-tui-smoke-") as tmp:
         visible("CONTROLS")
         os.write(master,b"jj\r")
         until(lambda:any(c["command"]=="players/cmd/stop" for c in calls))
+        os.write(master,b"?")
+        visible("CONTROLS")
+        os.write(master,b"/Save queue")
+        visible("Save queue as playlist…")
+        os.write(master,b"\r")
+        visible("SAVE QUEUE AS PLAYLIST…")
+        os.write(master,b"Smoke list\r")
+        until(lambda:any(c["command"]=="player_queues/save_as_playlist" and c["args"] == {"queue_id":"leader","name":"Smoke list"} for c in calls))
         os.write(master,b"\x1bOS")  # F4 focuses the queue; Esc now cancels or steps back.
         visible("QUEUE")
         os.write(master,b"\x1b[3~")
@@ -144,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix="ma-tui-smoke-") as tmp:
         os.write(master,b"q")
         assert proc.wait(timeout=5)==0
         assert termios.tcgetattr(slave)==original
-        print("Connected fixture smoke passed: browse before player selection, playlist tracks, all queue choices, whole collection, group routing, search, controls, terminal restoration")
+        print("Connected fixture smoke passed: browse before player selection, playlist favorites and tracks, all queue choices, whole collection, group routing, search, controls, terminal restoration")
     finally:
         if proc.poll() is None: proc.kill();proc.wait()
         server.shutdown()

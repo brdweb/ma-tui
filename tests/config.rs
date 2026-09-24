@@ -11,6 +11,8 @@ fn parses_server_without_storing_a_token() {
     assert_eq!(cfg.volume, 50);
     assert_eq!(cfg.output_buffer_frames, None);
     assert_eq!(config::Config::default().output_buffer_frames, None);
+    assert!(cfg.mpris);
+    assert!(!cfg.notifications);
     let saved = toml::to_string_pretty(&cfg).unwrap();
     assert!(!saved.contains("output_buffer_frames"));
     assert_eq!(

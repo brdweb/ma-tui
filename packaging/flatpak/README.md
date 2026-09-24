@@ -1,11 +1,11 @@
 # Flatpak bundle
 
-Download `ma-tui-v0.9.3-linux-x86_64.flatpak` and `SHA256SUMS` from
+Download `ma-tui-v1.0.0-linux-x86_64.flatpak` and `SHA256SUMS` from
 the GitHub release, then run:
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
-flatpak install --user ./ma-tui-v0.9.3-linux-x86_64.flatpak
+flatpak install --user ./ma-tui-v1.0.0-linux-x86_64.flatpak
 flatpak run io.github.brdweb.MaTui
 ```
 
@@ -26,13 +26,16 @@ the Flatpak as your laptop speaker to avoid two endpoints.
 
 Permissions enable the network for Music Assistant, PulseAudio for desktop audio
 (including PipeWire's PulseAudio compatibility service), and the Secret Service
-D-Bus name for login storage. Flatpak's PulseAudio permission also permits audio
-input, although MA-TUI only opens output streams. Read-only access to
-`~/.local/state/omarchy/current` follows modern Omarchy theme updates without
-access to the rest of your home or native MA-TUI configuration. Legacy/custom
-Omarchy theme locations are not exposed automatically. No window-system or
-full-session-bus permission is requested. The runtime's default ALSA output
-routes through PulseAudio; use the desktop mixer to select the physical output.
+D-Bus name for login storage. The Flatpak also owns
+`org.mpris.MediaPlayer2.ma_tui` so desktop media controls can discover MA-TUI,
+and talks to `org.freedesktop.Notifications` for optional track notifications.
+Flatpak's PulseAudio permission also permits audio input, although MA-TUI only
+opens output streams. Read-only access to `~/.local/state/omarchy/current`
+follows modern Omarchy theme updates without access to the rest of your home or
+native MA-TUI configuration. Legacy/custom Omarchy theme locations are not
+exposed automatically. These specific D-Bus permissions do not grant full
+session-bus access. The runtime's default ALSA output routes through PulseAudio;
+use the desktop mixer to select the physical output.
 
 Realtime scheduling is provided by the host audio stack. If it needs RTKit,
 install your distribution's `rtkit` package on the host; the Flatpak does not
@@ -52,7 +55,7 @@ headers and `desktop-file-validate`. No flatpak-builder or compiler SDK is neede
 cargo build --release --locked
 python3 packaging/arch/stage.py
 python3 packaging/flatpak/build.py
-flatpak install --user --noninteractive .tools/flatpak-package/ma-tui-v0.9.3-linux-x86_64.flatpak
+flatpak install --user --noninteractive .tools/flatpak-package/ma-tui-v1.0.0-linux-x86_64.flatpak
 flatpak run io.github.brdweb.MaTui --version
 flatpak run io.github.brdweb.MaTui --demo --snapshot
 flatpak run io.github.brdweb.MaTui --list-devices

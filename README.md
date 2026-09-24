@@ -5,15 +5,19 @@ Browse music, manage queues, control network speakers, or play audio on the
 computer running MA-TUI. Built with Rust + Ratatui and embedded **sendspin-rs**;
 no companion player process is required.
 
-- Browse and search library and provider content, and choose where to play it.
-- Control transport, volume, groups, sources and queues.
+- Browse and search library and provider content; favourite items, add provider
+  items to the library, and choose where to play them.
+- Control transport, volume, groups, sources and queues from the terminal, media
+  keys or desktop bars.
+- Start a dynamic radio playlist from a track, album, artist or playlist; add
+  items to editable playlists or save the current queue as one.
 - Follow podcasts and audiobooks: continue listening, unplayed episodes, resume
   points, and marking episodes played.
 - See album art and a spectrum of MA-TUI's own output while it plays.
 - Save credentials in the desktop keyring; follow live Omarchy theme changes.
 
-MA-TUI targets **Music Assistant 2.10.2** and is pre-1.0: the features above are
-in daily use, but other server versions and audio devices may behave differently.
+MA-TUI targets **Music Assistant 2.10.2**. Its 1.0 scope is complete and stable,
+but other server versions and audio devices may behave differently.
 See [Known limitations](#known-limitations).
 
 ![MA-TUI showing the player, speaker list and music browser](docs/images/screenshot.png)
@@ -95,9 +99,10 @@ Non-secret settings live at `$XDG_CONFIG_HOME/ma-tui/config.toml` (mode 0600);
 an existing file. Keep `player_id` unchanged to retain the same Music Assistant
 speaker identity; `player_name` is what this computer advertises. `spectrum`
 (`braille` or `blocks`) and `album_art` (`auto`, `sixel`, `blocks` or `off`) choose
-how the player draws. Configurations and keyring entries from the former
-`local-matui`/`matui` names are still read while no current one exists. Do not put
-tokens in TOML or Git; prefer HTTPS outside a trusted LAN.
+how the player draws. `mpris = true` enables desktop player integration;
+`notifications = true` enables track notifications. Configurations and keyring
+entries from the former `local-matui`/`matui` names are still read while no current
+one exists. Do not put tokens in TOML or Git; prefer HTTPS outside a trusted LAN.
 
 ## Playback and player controls
 
@@ -105,13 +110,16 @@ The player sits on top; the speakers and queue fill the left column and the musi
 browser, search results or a menu the right, so the queue stays visible while you
 browse. The bottom two lines list the keys for the focused pane and the transport.
 
-Select a speaker with Enter, then browse the **Music** pane. It opens with
-**Continue listening**, **Unplayed podcasts** and **Recently added**, then the
-libraries, favorite tracks and provider browsing. Enter opens a collection or
-folder; on a track it offers **Play now (replace queue)**, **Play next**, or **Add
-to queue**, naming the destination speaker. Press **P** on an album, playlist or
-podcast to choose playback for the whole collection, or to mark an episode or
-audiobook played. Browsing does not start playback.
+Select a speaker with Enter, then browse the **Music** pane. Home opens with
+**Continue listening**, **Unplayed podcasts**, **Recently added**, **Recently
+played**, favorite tracks, albums, artists, playlists and radio, then the
+libraries and provider browsing. Enter opens a collection or folder; on a track it
+offers **Play now (replace queue)**, **Play next**, or **Add to queue**, naming the
+destination speaker. Its **Start radio** entry replaces the queue with a radio
+playlist. Its Library section adds or removes favourites, adds a provider item to
+the library, and opens **Add to playlist…** for editable playlists. Press **P** on
+an album, playlist or podcast to choose playback for the whole collection, or to
+mark an episode or audiobook played. Browsing does not start playback.
 
 | Key | Action |
 | --- | --- |
@@ -128,9 +136,13 @@ audiobook played. Browsing does not start playback.
 | b / F3 | Open music browser |
 | Enter in music/search | Open collection or choose playback for an item |
 | P in music/search | Choose playback for the whole item, or mark it played |
+| f in music/search | Toggle favourite on the highlighted item |
+| F | Toggle favourite on the now-playing item |
 | a / N in music/search | Add to queue / play next |
 | Backspace in music | Go back, restoring the previous selection |
-| ] in music | Next library page (100 items per page) |
+| [ / ] in music | Previous / next library page (100 items per page) |
+| o in music | Cycle the library sort |
+| Ctrl-F in music | Filter the current library listing; Enter applies, Esc cancels |
 | F4 | Focus the queue pane |
 | Esc | Leave search, go back in the browser, or close a menu |
 | Enter in queue | Play highlighted existing queue item |
@@ -144,8 +156,9 @@ audiobook played. Browsing does not start playback.
 The controls menu covers transport and external sources, mute, power,
 individual/group volume, absolute seek, sleep timers, grouping, sound modes,
 writable player options, queue shuffle/repeat, autoplay/crossfade,
-play/remove/reorder/clear, playback transfer, audiobook/podcast speed, and media
-URIs. Entries are grouped under headings and **/** filters them.
+play/remove/reorder/clear, **Save queue as playlist…**, playback transfer,
+audiobook/podcast speed, and media URIs. Entries are grouped under headings and
+**/** filters them.
 
 Search covers tracks, albums, artists, playlists, radio, audiobooks and podcasts
 (up to 50 results per type). Album and playlist results open their tracks; artists
@@ -169,6 +182,20 @@ computer, so the strip names the playing speaker instead of inventing a display.
 Album art sits beside it. `album_art = "auto"` asks the terminal whether it draws
 sixel and falls back to colour half blocks; `sixel` and `blocks` settle it
 outright. Run `ma-tui --check-art` to see what your terminal reports.
+
+### Desktop integration
+
+While connected, except in `--demo`, MA-TUI registers
+`org.mpris.MediaPlayer2.ma_tui` on the session D-Bus. Media keys, `playerctl` and
+the Waybar/Omarchy bar can show the title, artists, album, cover URL, length,
+position, status, volume, shuffle and repeat. They can play, pause, stop, move
+between queue items, seek, and change volume, shuffle or repeat on the selected
+player. `mpris = true` is the default; set it to `false` to disable this
+integration. If another MA-TUI instance already owns the name, this one continues
+without MPRIS and shows a notice.
+
+`notifications = false` is the default. Set it to `true` to show a desktop
+notification for each new track while playing, replacing the previous one.
 
 ## Themes
 
@@ -234,10 +261,11 @@ Album art needs a terminal that draws sixel to look sharp — foot does, Alacrit
 has no image protocol at all — and a multiplexer will generally not forward
 either.
 
-MA-TUI does not administer users, providers, DSP or the MA server, and has no
-desktop media-key integration. Audiobooks have no chapter navigation, because
-Music Assistant 2.10.2 has no chapter model. Player support varies; server
-rejections appear as command errors. Prolonged playback, broader hardware and
+MA-TUI does not administer users, providers, DSP or the MA server. Audiobooks
+have no chapter navigation, because Music Assistant 2.10.2 has no chapter model.
+Player support varies; server rejections appear as command errors. Playlist
+additions finish in the background on the server, and radio uses Music
+Assistant's dynamic radio playlists. Prolonged playback, broader hardware and
 codec coverage, restart recovery and multi-room synchronization need further
 testing.
 

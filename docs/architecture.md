@@ -341,6 +341,48 @@ small to recognise. `album_art = false` turns it off entirely.
 Sources: `controllers/metadata/images.py` and `constants.py` at server tag
 2.10.2, and `media_items/media_item.py` in music-assistant/models.
 
+## Desktop integration (2026-09-23)
+
+`src/mpris.rs` uses zbus 5 on the existing Tokio runtime to register
+`org.mpris.MediaPlayer2.ma_tui` while connected, never in `--demo`. Each UI tick
+derives an MPRIS snapshot from `App` and publishes it through a watch channel
+only when it changed. D-Bus transport, seek, volume, shuffle and repeat commands
+become existing `ui::Action`s and follow the same dispatch path as keys, so they
+retain selected-player and queue checks. Position is estimated between snapshots;
+a position jump emits `Seeked`. Artwork is the unauthenticated MA image-proxy URL,
+not an authenticated image fetch.
+
+The name is optional: a name already owned by another instance leaves the TUI
+connected and reports a notice rather than replacing its owner. Notifications are
+also optional and replace the prior notification for each newly playing track.
+
+## Library edits, radio and playlists (2026-09-23)
+
+The MA 2.10.2 favourites commands are `music/favorites/add_item` with
+`{item: uri}` and `music/favorites/remove_item` with `{media_type,
+library_item_id}`. Removal first resolves the library ID with
+`music/item_by_uri`; adding an item to the library uses `music/library/add_item`.
+`music/recently_played_items` supplies the Home shelf. Library listings use
+`library_items` search and `order_by` arguments. `media_item_updated`,
+`media_item_added` and `media_item_deleted` events update an already displayed
+listing in place.
+
+Radio uses `player_queues/play_media` with
+`radio_playlist://playlist/<uri>` and `option: "replace"`. MA 2.10.2 deprecates
+`radio_mode`; the dynamic radio playlist URI is the supported representation.
+The editable-playlist picker reads `music/playlists/library_items` and keeps only
+`is_editable` rows. It creates with `music/playlists/create_playlist`, then adds
+the URI through `music/playlists/add_playlist_tracks`; that command returns a
+background task, so completion is server-side. `player_queues/save_as_playlist`
+saves the selected queue.
+
+Sources: [music controller](https://github.com/music-assistant/server/blob/2.10.2/music_assistant/controllers/music/controller.py),
+[music media base](https://github.com/music-assistant/server/blob/2.10.2/music_assistant/controllers/music/media/base.py),
+[playlist media](https://github.com/music-assistant/server/blob/2.10.2/music_assistant/controllers/music/media/playlists.py),
+[player queues](https://github.com/music-assistant/server/blob/2.10.2/music_assistant/controllers/player_queues/controller.py),
+and [the client radio playlist URI](https://github.com/music-assistant/client/blob/main/music_assistant_client/player_queues.py).
+Verification used local fixtures and the session bus only, not a live server.
+
 ## Engineering safeguards
 
 - Treat successful command submission separately from confirmed player state.

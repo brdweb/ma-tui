@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ma_tui::{
-    controls::{Command, InputKind, Menu, Prompt},
+    controls::{Command, InputKind, Menu, Prompt, PromptTarget},
     ui::{Action, App, Focus, PlayerView, TrackView},
 };
 use serde_json::json;
@@ -77,11 +77,13 @@ fn queue_shortcuts_use_item_identity_and_menu_respects_player_capabilities() {
 fn numeric_prompts_reject_nan_out_of_range_and_fractional_volume() {
     let mut prompt = Prompt {
         label: "Volume".into(),
-        command: Command::Player {
-            name: "volume_set",
-            args: json!({}),
+        target: PromptTarget::Command {
+            command: Command::Player {
+                name: "volume_set",
+                args: json!({}),
+            },
+            argument: "volume_level",
         },
-        argument: "volume_level",
         value: String::new(),
         kind: InputKind::Number {
             min: 0.0,
@@ -96,11 +98,77 @@ fn numeric_prompts_reject_nan_out_of_range_and_fractional_volume() {
     prompt.value = "42".into();
     assert_eq!(
         prompt.submit().unwrap(),
-        Command::Player {
+        Action::Command(Command::Player {
             name: "volume_set",
             args: json!({"volume_level":42})
-        }
+        })
     );
+}
+
+#[test]
+fn playlist_prompts_trim_names_and_save_nonempty_queues() {
+    let mut playlist = Prompt {
+        label: "New playlist name".into(),
+        target: PromptTarget::CreatePlaylist {
+            uri: Some("library://track/1".into()),
+        },
+        kind: InputKind::Text,
+        value: "  Road trip  ".into(),
+    };
+    assert_eq!(
+        playlist.submit(),
+        Ok(Action::CreatePlaylist {
+            name: "Road trip".into(),
+            uri: Some("library://track/1".into()),
+        })
+    );
+    playlist.value = " \t ".into();
+    assert_eq!(playlist.submit(), Err("Enter a value"));
+    playlist.value = "x".repeat(201);
+    assert_eq!(
+        playlist.submit(),
+        Err("Playlist names cannot exceed 200 characters")
+    );
+
+    let app = App {
+        connected: true,
+        selected_id: Some("player".into()),
+        queue_id: "queue".into(),
+        queue: vec![TrackView::default()],
+        players: vec![PlayerView {
+            id: "player".into(),
+            available: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let menu = Menu::new(&app);
+    let Action::Prompt(mut save) = menu
+        .entries
+        .iter()
+        .find(|entry| entry.label == "Save queue as playlist…")
+        .expect("save queue entry")
+        .action
+        .clone()
+    else {
+        panic!("save queue action is a prompt");
+    };
+    save.value = "  Queue mix  ".into();
+    assert_eq!(
+        save.submit(),
+        Ok(Action::Command(Command::Queue {
+            id: "queue".into(),
+            name: "save_as_playlist",
+            args: json!({"name":"Queue mix"}),
+        }))
+    );
+
+    let mut empty = app;
+    empty.queue.clear();
+    assert!(!Menu::new(&empty)
+        .entries
+        .iter()
+        .any(|entry| entry.label == "Save queue as playlist…"));
 }
 
 /// A long menu is grouped and searchable; filtering never runs an action.

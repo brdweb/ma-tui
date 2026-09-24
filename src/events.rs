@@ -8,12 +8,12 @@
 //! subscribe command to send. Events then arrive unprompted as
 //! `{"event":…, "object_id":…, "data":…}`.
 //!
-//! Only the event name and `object_id` are trusted for routing; the one payload
-//! read is `queue_time_updated`, whose `data` is the elapsed seconds itself
-//! (`player_queues/controller.py` signals `data=queue.elapsed_time`). Everything
-//! else is treated as "this went stale", and the existing HTTP reads remain the
-//! single place that parses a player or a queue. Peer input never reaches an
-//! error message.
+//! Event names and `object_id`s route updates. `queue_time_updated` carries
+//! elapsed seconds (`player_queues/controller.py` signals
+//! `data=queue.elapsed_time`), while media-item events carry a full library
+//! item for the interface to apply directly. Everything else is treated as
+//! "this went stale", and the existing HTTP reads remain the single place that
+//! parses a player or a queue. Peer input never reaches an error message.
 
 use anyhow::{anyhow, bail, Result};
 use futures_util::{SinkExt, StreamExt};
@@ -34,6 +34,11 @@ pub enum Event {
     Elapsed(String, f64),
     /// Played/resume state changed somewhere in the library.
     Playlog,
+    /// A library item changed; deletion carries no replacement item.
+    MediaItem {
+        uri: String,
+        item: Option<serde_json::Value>,
+    },
     /// The stream is live again; anything shown may have been missed.
     Online,
     /// The stream dropped. Polling has to carry the interface until it returns.
@@ -183,6 +188,17 @@ pub fn translate(value: &serde_json::Value) -> Option<Event> {
             Some(Event::Elapsed(object()?, seconds.max(0.0)))
         }
         "playlog_updated" | "media_item_played" => Some(Event::Playlog),
+        "media_item_updated" | "media_item_added" => {
+            let item = value.get("data").filter(|item| item.is_object())?.clone();
+            Some(Event::MediaItem {
+                uri: object()?,
+                item: Some(item),
+            })
+        }
+        "media_item_deleted" => Some(Event::MediaItem {
+            uri: object()?,
+            item: None,
+        }),
         _ => None,
     }
 }

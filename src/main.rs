@@ -6,6 +6,44 @@ use ma_tui::{
 };
 use std::io::IsTerminal;
 
+fn dispatch(
+    app: &mut App,
+    action: ui::Action,
+    requests: &tokio::sync::mpsc::Sender<ma_tui::controller::Request>,
+    selection: &tokio::sync::watch::Sender<Option<String>>,
+) {
+    if let ui::Action::Select(id) = action {
+        if selection.send(Some(id)).is_err() {
+            app.status = "API worker stopped".into();
+        }
+    } else {
+        let searching = matches!(action, ui::Action::Search(_));
+        let browsing = matches!(action, ui::Action::Browse { .. });
+        if requests
+            .try_send(ma_tui::controller::Request::new(
+                app.selected_id.clone(),
+                action,
+            ))
+            .is_err()
+        {
+            app.status = "Busy: command not sent; try again".into();
+            if browsing {
+                app.music.apply(
+                    app.music.generation,
+                    Err("Busy: press r to retry loading music".into()),
+                );
+            }
+        } else if searching {
+            app.results.clear();
+            app.status = "Searching…".into();
+        } else if browsing {
+            app.status = "Browsing music · Enter opens collections; P chooses playback".into();
+        } else {
+            app.status = "Command pending…".into();
+        }
+    }
+}
+
 fn demo() -> App {
     App {
         demo: true,
@@ -235,16 +273,32 @@ async fn main() -> Result<()> {
         } else {
             None
         };
+        let mut app = App {
+            // Only real device output produces samples; a remote speaker
+            // never routes audio through this machine.
+            spectrum: audio.as_ref().map(|_| spectrum.clone()),
+            spectrum_style: config.spectrum,
+            sixel: ma_tui::artwork::use_sixel(config.album_art),
+            local_endpoint: local_id.map(str::to_owned),
+            ..App::default()
+        };
+        let server_base = config.server.trim_end_matches('/').to_owned();
+        let (mut mpris_state, mut mpris_commands, mpris) = if config.mpris {
+            let (state, receiver) =
+                tokio::sync::watch::channel(ma_tui::mpris::NowPlaying::default());
+            let (commands, actions) = tokio::sync::mpsc::unbounded_channel();
+            match ma_tui::mpris::Mpris::start(commands, receiver, config.notifications).await {
+                Ok(mpris) => (Some(state), Some(actions), Some(mpris)),
+                Err(error) => {
+                    app.status = format!("Media keys unavailable: {error}");
+                    (None, None, None)
+                }
+            }
+        } else {
+            (None, None, None)
+        };
         let result = ma_tui::terminal_ui::run(
-            App {
-                // Only real device output produces samples; a remote speaker
-                // never routes audio through this machine.
-                spectrum: audio.as_ref().map(|_| spectrum.clone()),
-                spectrum_style: config.spectrum,
-                sixel: ma_tui::artwork::use_sixel(config.album_art),
-                local_endpoint: local_id.map(str::to_owned),
-                ..App::default()
-            },
+            app,
             |app| {
                 let mut changed = false;
                 while let Ok(update) = controller.updates.try_recv() {
@@ -270,42 +324,33 @@ async fn main() -> Result<()> {
                         changed = true;
                     }
                 }
-                changed
-            },
-            |app, action| {
-                if let ui::Action::Select(id) = action {
-                    if selection.send(Some(id)).is_err() {
-                        app.status = "API worker stopped".into();
-                    }
-                } else {
-                    let searching = matches!(action, ui::Action::Search(_));
-                    let browsing = matches!(action, ui::Action::Browse { .. });
-                    if requests
-                        .try_send(ma_tui::controller::Request::new(
-                            app.selected_id.clone(),
-                            action,
-                        ))
-                        .is_err()
-                    {
-                        app.status = "Busy: command not sent; try again".into();
-                        if browsing {
-                            app.music.apply(
-                                app.music.generation,
-                                Err("Busy: press r to retry loading music".into()),
-                            );
+                if let (Some(state), Some(commands)) =
+                    (mpris_state.as_mut(), mpris_commands.as_mut())
+                {
+                    let snapshot = ma_tui::mpris::snapshot(app, &server_base);
+                    let _ = state.send_if_modified(|current| {
+                        if current == &snapshot {
+                            false
+                        } else {
+                            *current = snapshot;
+                            true
                         }
-                    } else if searching {
-                        app.results.clear();
-                        app.status = "Searching…".into();
-                    } else if browsing {
-                        app.status =
-                            "Browsing music · Enter opens collections; P chooses playback".into();
-                    } else {
-                        app.status = "Command pending…".into();
+                    });
+                    let now = state.borrow();
+                    while let Ok(command) = commands.try_recv() {
+                        if let Some(action) = ma_tui::mpris::action(command, &now, &app.queue_id) {
+                            dispatch(app, action, &requests, &selection);
+                            changed = true;
+                        }
                     }
                 }
+                changed
             },
+            |app, action| dispatch(app, action, &requests, &selection),
         );
+        if let Some(mpris) = mpris {
+            mpris.shutdown().await;
+        }
         controller.shutdown().await;
         if let Some(events) = events {
             events.shutdown().await;
