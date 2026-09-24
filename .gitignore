@@ -5,6 +5,7 @@
 *.local
 
 # Local development and agent state
+AGENTS.md
 CLAUDE.md
 .venv/
 node_modules/
