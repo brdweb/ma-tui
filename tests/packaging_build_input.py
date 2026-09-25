@@ -190,7 +190,8 @@ class BuildInputTests(unittest.TestCase):
         stage_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(stage_module)
         for name in ['README.md', 'LICENSE', 'packaging/ma-tui.desktop',
-                     'docs/audio-troubleshooting.md', 'packaging/arch/DEVELOPMENT-STATUS',
+                     'packaging/ma-tui.svg', 'docs/audio-troubleshooting.md',
+                     'packaging/arch/DEVELOPMENT-STATUS',
                      'packaging/arch/INSTALL.txt', 'packaging/arch/PKGBUILD.in',
                      'tests/terminal_smoke.py', 'tests/connected_smoke.py']:
             path = self.root / name
@@ -236,7 +237,7 @@ class BuildInputTests(unittest.TestCase):
             source.parent.mkdir(parents=True, exist_ok=True)
             source.write_text('fixture ' + name)
             (stage / source.name).write_bytes(source.read_bytes())
-        for name in ['ma-tui.desktop', 'INSTALL.txt', 'DEVELOPMENT-STATUS']:
+        for name in ['ma-tui.desktop', 'ma-tui.svg', 'INSTALL.txt', 'DEVELOPMENT-STATUS']:
             (stage / name).write_text('fixture ' + name)
         (stage / 'third-party').mkdir()
         (stage / 'ma-tui').write_bytes(self.binary)
