@@ -317,6 +317,30 @@ impl ApiClient {
     pub async fn enqueue_uri(&self, player_id: &str, uri: &str) -> Result<()> {
         self.media(player_id, uri, "add").await
     }
+    /// Replace the active queue with the first URI, then append the rest in order.
+    pub async fn play_uris(&self, player_id: &str, uris: &[String]) -> Result<()> {
+        if uris.is_empty() {
+            return Err(anyhow!("No tracks to play"));
+        }
+        self.media_uris(player_id, uris, "replace").await
+    }
+    /// Append each URI in order to the player's active queue, stopping on the
+    /// first failed append. Resolve the queue only once for the whole batch.
+    pub async fn enqueue_uris(&self, player_id: &str, uris: &[String]) -> Result<()> {
+        self.media_uris(player_id, uris, "add").await
+    }
+    async fn media_uris(&self, player_id: &str, uris: &[String], first_option: &str) -> Result<()> {
+        let queue = self.active_queue(player_id).await?;
+        let queue_id = queue["queue_id"].as_str().unwrap_or_default();
+        for (index, uri) in uris.iter().enumerate() {
+            self.command(
+                "player_queues/play_media",
+                json!({"queue_id":queue_id,"media":uri,"option":if index == 0 { first_option } else { "add" }}),
+            )
+            .await?;
+        }
+        Ok(())
+    }
     pub async fn play_next_uri(&self, player_id: &str, uri: &str) -> Result<()> {
         self.media(player_id, uri, "next").await
     }

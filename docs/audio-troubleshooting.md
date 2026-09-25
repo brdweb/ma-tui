@@ -6,10 +6,11 @@ and in **F2** settings; an explicitly selected missing device remains an error.
 The Flatpak uses the host's PulseAudio-compatible service for its default output.
 
 If local audio remains failed after automatic recovery, press **F2**, then
-**Esc**, to recreate the local speaker connection. Preserve the visible error
+**Esc**, to recreate the local speaker connection. Preserve the visible status
 when reporting a problem, along with the selected output and whether the app is
-native or Flatpak. A stream I/O error alone does not identify whether the fault
-started in the device, audio service or scheduler.
+native or Flatpak. `reconnecting` reports a Sendspin session retry; a terminal
+`worker queue overflow` means MA-TUI could not accept the server's bounded
+cached-audio burst and stops rather than retrying the same failure indefinitely.
 
 ## Recovery and diagnostics
 
@@ -29,11 +30,10 @@ this exception. A silent test on the affected output reproduced recovery in
 10–20 ms without recreating the stream; this is not a long-duration playback
 guarantee.
 
-Local audio diagnostics report the backend, stream format, observed callback
-frame count, maximum gap, observed/recovered underruns and timing-error recovery
-episodes, along with pending recovery. Include
-those details in a report when available. A callback gap measures progress in
-the application's output callback; it does not measure acoustic latency.
+The footer shows the local-audio state and, for known failures, a short fixed
+connection or output reason. It never exposes raw server, device or timing
+diagnostics. A callback gap measures progress in the application's output
+callback; it does not measure acoustic latency.
 
 ## Optional output buffer
 

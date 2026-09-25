@@ -126,8 +126,9 @@ stereo PCM16 can legitimately fill almost 11 seconds and expands to i32 samples.
 The decoded queue therefore permits 32 MiB, 4096 chunks and a 35-second scheduling
 horizon (30 seconds plus timing margin). This covers the largest advertised
 96 kHz stereo format. Per-chunk size/duration and overlap checks remain bounded;
-the protocol/worker handoffs retain their separate limits. These are software
-buffer bounds, not a claim of measured device latency or global memory bounds.
+the protocol-to-worker handoff accepts 1024 items while reserving at most 2 MiB
+of encoded audio. These are software buffer bounds, not a claim of measured
+device latency or global memory bounds.
 
 The local playback regression reproduced rejection at PCM chunk 76 with a
 500 ms initial lead, before the advertised encoded capacity was reached. Tests

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
@@ -29,7 +31,15 @@ pub enum Action {
     /// Absolute position in seconds, resolved by the interface.
     Seek(f64),
     Play(String),
+    /// Replace the queue with these track URIs in their displayed order.
+    PlayMany(Vec<String>),
+    /// Read one folder and replace the queue with its immediate playable children.
+    PlayFolder(crate::music::Target),
     Enqueue(String),
+    /// Append these track URIs in their displayed order.
+    EnqueueMany(Vec<String>),
+    /// Read one folder and append its immediate playable children.
+    EnqueueFolder(crate::music::Target),
     PlayNext(String),
     /// Mark a library item played or unplayed. Carries the item's identity
     /// because Music Assistant names the item itself, not a URI. This is a
@@ -206,6 +216,7 @@ impl App {
                     self.editing = false;
                     self.search_cursor = 0;
                     if !self.query.trim().is_empty() {
+                        self.search_selection.clear();
                         return Action::Search(self.query.trim().into());
                     }
                 }
@@ -220,6 +231,45 @@ impl App {
         if self.focus == Focus::Music {
             if let Some(action) = crate::music::key(self, key) {
                 return action;
+            }
+        }
+        if self.focus == Focus::Search {
+            if key.code == KeyCode::Char('x') && key.modifiers.is_empty() {
+                if let Some(uri) = self
+                    .results
+                    .get(self.search_cursor)
+                    .and_then(TrackView::playable_track_uri)
+                {
+                    if !self.search_selection.remove(uri) {
+                        self.search_selection.insert(uri.to_owned());
+                    }
+                }
+                return Action::None;
+            }
+            if key.code == KeyCode::Char('A') && !key.modifiers.contains(KeyModifiers::CONTROL) {
+                let mut uris: Vec<String> = Vec::with_capacity(self.search_selection.len());
+                for uri in self
+                    .results
+                    .iter()
+                    .filter_map(TrackView::playable_track_uri)
+                {
+                    if self.search_selection.contains(uri)
+                        && !uris.iter().any(|selected| selected.as_str() == uri)
+                    {
+                        uris.push(uri.to_owned());
+                    }
+                }
+                if uris.is_empty() {
+                    self.status = "Select tracks with x first".into();
+                    return Action::None;
+                }
+                let title = format!("{} selected tracks", uris.len());
+                return crate::music::queue_choices(
+                    self,
+                    &title,
+                    Action::PlayMany(uris.clone()),
+                    Action::EnqueueMany(uris),
+                );
             }
         }
         if self.focus == Focus::Search
@@ -252,24 +302,47 @@ impl App {
                 if matches!(key.code, KeyCode::Enter | KeyCode::Char('P')) {
                     return crate::music::choose(self, &media);
                 }
-                // The queue shortcuts still need a speaker of their own; the
-                // menu can now open without one, for progress alone.
-                if !self
-                    .players
-                    .iter()
-                    .any(|p| Some(&p.id) == self.selected_id.as_ref() && p.available)
+                // Queue shortcuts require a speaker; the full playback menu
+                // above may also contain library edits without one.
+                if !self.connected
+                    || !self
+                        .players
+                        .iter()
+                        .any(|p| Some(&p.id) == self.selected_id.as_ref() && p.available)
                 {
                     self.status = "Select an available speaker first".into();
                     return Action::None;
                 }
-                crate::music::choose(self, &media);
-                if self.menu.take().is_some() && media.playable && media.available {
+                if key.code == KeyCode::Char('a') {
+                    if media.kind == "folder" {
+                        if let Some(target) = media.open {
+                            return crate::music::queue_choices(
+                                self,
+                                &media.title,
+                                Action::PlayFolder(target.clone()),
+                                Action::EnqueueFolder(target),
+                            );
+                        }
+                    } else if matches!(media.kind.as_str(), "album" | "playlist")
+                        && media.available
+                        && media.playable
+                    {
+                        return crate::music::queue_choices(
+                            self,
+                            &media.title,
+                            Action::Play(media.uri.clone()),
+                            Action::Enqueue(media.uri),
+                        );
+                    }
+                }
+                if media.playable && media.available {
                     return if key.code == KeyCode::Char('a') {
                         Action::Enqueue(media.uri)
                     } else {
                         Action::PlayNext(media.uri)
                     };
                 }
+                self.status = "This item is not available for playback".into();
                 return Action::None;
             }
         }
@@ -396,6 +469,18 @@ impl App {
                     .any(|p| Some(&p.id) == self.selected_id.as_ref() && p.available) =>
             {
                 Action::None
+            }
+            KeyCode::Char('c') if self.focus == Focus::Queue && key.modifiers.is_empty() => {
+                if self.queue_id.trim().is_empty() {
+                    self.status = "No active queue for this player yet".into();
+                    Action::None
+                } else {
+                    Action::Command(crate::controls::Command::Queue {
+                        id: self.queue_id.clone(),
+                        name: "clear",
+                        args: serde_json::json!({}),
+                    })
+                }
             }
             KeyCode::Char(' ') | KeyCode::Char('p') => Action::Toggle,
             KeyCode::Char('n') | KeyCode::Char('>') | KeyCode::Char('.') => Action::Next,
@@ -528,6 +613,18 @@ pub struct TrackView {
     pub duration: f64,
 }
 
+impl TrackView {
+    /// Selection is only for playable tracks, and uses the media URI rather
+    /// than a search row's display/fallback URI.
+    fn playable_track_uri(&self) -> Option<&str> {
+        self.media
+            .as_ref()
+            .filter(|media| media.kind == "track" && media.available && media.playable)
+            .map(|media| media.uri.as_str())
+            .filter(|uri| !uri.is_empty())
+    }
+}
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub enum Focus {
     #[default]
@@ -555,6 +652,8 @@ pub struct App {
     pub players: Vec<PlayerView>,
     pub queue: Vec<TrackView>,
     pub results: Vec<TrackView>,
+    /// Search marks use media URIs, separate from the Music browser's page marks.
+    pub search_selection: HashSet<String>,
     pub selected_id: Option<String>,
     pub title: String,
     pub artist: String,
@@ -616,6 +715,7 @@ impl Default for App {
             players: vec![],
             queue: vec![],
             results: vec![],
+            search_selection: HashSet::new(),
             selected_id: None,
             title: "No player selected".into(),
             artist: "Select a player and press Enter".into(),
@@ -623,7 +723,7 @@ impl Default for App {
             elapsed_at: None,
             duration: 0.0,
             status: "Disconnected".into(),
-            audio_status: "Local audio disabled".into(),
+            audio_status: "Local audio · disabled".into(),
             focus: Focus::Players,
             player_cursor: 0,
             queue_cursor: 0,
@@ -670,9 +770,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     app.scrolling = false;
     app.artwork_area = None;
-    // Chrome is two header rows, the player, two for status and two for hints;
-    // everything else belongs to the lists. The player carries the spectrum
-    // when this run has local audio and the terminal can spare the rows.
+    // Keep the queue and browser at least three rows tall. Full key labels wrap
+    // at separators, while cramped terminals show a compact set of full labels.
+    // The player carries the spectrum when this run has local audio.
     let strip = strip_rows(app, area.height);
     // A cover needs rows of its own: it must not depend on the spectrum being
     // there, and four rows of player would leave it too small to recognise.
@@ -681,6 +781,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else {
         0
     };
+    let min_panes = 9 + (4 + strip).max(cover);
+    let key_hints = hint_rows(
+        app,
+        area.width as usize,
+        area.height.saturating_sub(min_panes) as usize,
+    );
     let rows = Layout::vertical([
         Constraint::Length(2),
         Constraint::Length((4 + strip).max(cover)),
@@ -688,7 +794,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Min(3),
         Constraint::Length(1),
         Constraint::Length(2),
-        Constraint::Length(2),
+        Constraint::Length(key_hints.len() as u16),
     ])
     .split(area);
     let mode = if app.demo {
@@ -764,37 +870,125 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
     frame.render_widget(Paragraph::new(message), rows[5]);
     frame.render_widget(
-        Paragraph::new(format!("{}\n{}", hints(app), TRANSPORT_HINTS))
-            .style(Style::default().fg(palette.secondary)),
+        Paragraph::new(key_hints.join("\n")).style(Style::default().fg(palette.secondary)),
         rows[6],
     );
 }
 
-/// Keys for the focused pane. The transport line below it never changes.
+/// Keys for the focused pane, with transport controls when they are active.
 fn hints(app: &App) -> &'static str {
-    if app.menu.is_some() {
-        return "Enter applies · / filter · Esc returns · the player keeps running";
+    if let Some(menu) = &app.menu {
+        return if menu.prompt.is_some() {
+            "Enter submit input · Esc cancel input"
+        } else if menu.filtering {
+            "Enter choose option · Esc clear filter · Up/Down move"
+        } else {
+            "Enter choose option · / filter menu · Esc close menu · Up/Down move"
+        };
     }
     if app.music.filtering {
-        return "Enter applies filter · Esc cancels";
+        return "Enter apply filter · Esc cancel filter";
     }
     if app.editing {
-        return "Enter submits the search · Esc cancels";
+        return "Enter submit search · Esc cancel search";
     }
     match app.focus {
-        Focus::Players => "Enter select speaker · ↑↓ move · Tab pane · b music · / search · F2 settings",
-        Focus::Queue => "Enter play item · Delete remove · Shift-J/K move · Tab pane · b music",
-        Focus::Music => {
-            "Enter open · P play · a add · N next · f fav · Backspace · r reload · [ ] page · o sort · ^F filter"
+        Focus::Players => {
+            "Enter select speaker · Up/Down move · Tab change pane · b music · / search · F2 settings"
         }
-        Focus::Search => "Enter play · a add · N play next · f fav · / new search · Esc back to music",
+        Focus::Queue => {
+            "Enter play item · Delete remove item · Shift-J/K move item · c clear queue · r reload · Tab change pane · b music"
+        }
+        Focus::Music if matches!(&app.music.page.target, crate::music::Target::Library { .. }) => {
+            "Enter open/play menu · P playback menu · x select track · A selected replace/add menu · a add item or choose queue · N play next · f favourite · Esc back · r reload · [/] previous/next page · o sort · Ctrl-F filter · / search · Tab change pane"
+        }
+        Focus::Music => {
+            "Enter open/play menu · P playback menu · x select track · A selected replace/add menu · a add item or choose queue · N play next · f favourite · Esc back · r reload · / search · Tab change pane"
+        }
+        Focus::Search => {
+            "Enter open/play menu · P playback menu · x select track · A selected replace/add menu · a add item or choose queue · N play next · f favourite · / search · Esc back · Tab change pane"
+        }
     }
 }
 
-// Kept to 102 columns so it survives a narrow terminal; everything else lives
-// in the controls menu.
-const TRANSPORT_HINTS: &str =
-    "Space/p pause · </> track · s stop · +/- vol · m mute · z shuffle · l repeat · ? all keys";
+const TRANSPORT_HINTS: &str = "Space/p pause/resume · </> previous/next · s stop · +/- volume · m mute · z shuffle · l repeat · ? controls";
+
+/// Wrap only between labels: splitting a shortcut from its operation leaves
+/// the exact orphan abbreviations these hints are meant to replace.
+fn hint_rows(app: &App, width: usize, max_rows: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let transport = if app.menu.is_none() && !app.music.filtering && !app.editing {
+        TRANSPORT_HINTS
+    } else {
+        ""
+    };
+    for group in [hints(app), transport]
+        .into_iter()
+        .filter(|group| !group.is_empty())
+    {
+        let mut row = String::new();
+        for label in group.split(" · ") {
+            if !row.is_empty() && row.chars().count() + 3 + label.chars().count() > width {
+                rows.push(std::mem::take(&mut row));
+            }
+            if !row.is_empty() {
+                row.push_str(" · ");
+            }
+            row.push_str(label);
+        }
+        rows.push(row);
+    }
+    if rows.len() <= max_rows {
+        return rows;
+    }
+
+    // At the 50x16 minimum there are only three rows left for hints. Keep the
+    // important pane actions and the route to the full controls menu readable.
+    let compact = if let Some(menu) = &app.menu {
+        if menu.prompt.is_some() {
+            [
+                "Enter submit input · Esc cancel input",
+                "Type to edit input",
+            ]
+        } else if menu.filtering {
+            [
+                "Enter choose option · Esc clear filter",
+                "Type to filter options",
+            ]
+        } else {
+            ["Enter choose option · Esc close menu", "/ filter menu"]
+        }
+    } else if app.music.filtering {
+        [
+            "Enter apply filter · Esc cancel filter",
+            "Type to edit filter",
+        ]
+    } else if app.editing {
+        ["Enter submit search · Esc cancel search", "Type a query"]
+    } else {
+        match app.focus {
+            Focus::Players => [
+                "Enter select speaker · Tab change pane",
+                "b music · / search · F2 settings",
+            ],
+            Focus::Queue => [
+                "Enter play item · c clear queue",
+                "Delete remove item · Shift-J/K move item",
+            ],
+            Focus::Music | Focus::Search => [
+                "Enter open/play menu · P playback menu",
+                "A replace/add selected · a add item / choose queue",
+            ],
+        }
+    };
+    let compact_transport = (!transport.is_empty()).then_some("Space/p pause/resume · ? controls");
+    compact
+        .into_iter()
+        .chain(compact_transport)
+        .take(max_rows)
+        .map(str::to_owned)
+        .collect()
+}
 
 /// Rows the spectrum strip takes as part of the player, or none when this run
 /// has no local audio to analyze or the terminal is too short to spare them.
@@ -1025,6 +1219,7 @@ fn track_items<'a>(
     numbered: bool,
     playing: &str,
     width: u16,
+    selected: Option<&HashSet<String>>,
 ) -> Vec<ListItem<'a>> {
     // The cursor takes two columns, the number four, the state column eight.
     let state_width = 8usize;
@@ -1046,16 +1241,28 @@ fn track_items<'a>(
             } else {
                 String::new()
             };
-            let marker = if track.media.as_ref().is_some_and(|media| media.favorite) {
+            let favorite = if track.media.as_ref().is_some_and(|media| media.favorite) {
                 " ♥"
             } else {
                 ""
             };
-            let title_text_width = title_width.saturating_sub(marker.chars().count());
+            let selection = if selected.is_some_and(|selected| {
+                track
+                    .playable_track_uri()
+                    .is_some_and(|uri| selected.contains(uri))
+            }) {
+                " ✓"
+            } else {
+                ""
+            };
+            let title_text_width =
+                title_width.saturating_sub(favorite.chars().count() + selection.chars().count());
             let title = truncate(&track.title, title_text_width);
             ListItem::new(vec![
                 Line::from(vec![
-                    Span::raw(format!("{position}{title:<title_text_width$}{marker}")),
+                    Span::raw(format!(
+                        "{position}{title:<title_text_width$}{favorite}{selection}"
+                    )),
                     Span::styled(
                         format!("{state:>state_width$}"),
                         Style::default().fg(if state == "PLAYING" {
@@ -1140,7 +1347,7 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
     draw_list(
         frame,
         body,
-        track_items(&app.queue, palette, true, playing, body.width),
+        track_items(&app.queue, palette, true, playing, body.width, None),
         app.queue_cursor,
         palette,
         "  Queue is empty or not loaded",
@@ -1163,7 +1370,14 @@ fn draw_search(frame: &mut Frame, app: &App, area: Rect) {
     draw_list(
         frame,
         area,
-        track_items(&app.results, palette, false, "", area.width),
+        track_items(
+            &app.results,
+            palette,
+            false,
+            "",
+            area.width,
+            Some(&app.search_selection),
+        ),
         app.search_cursor,
         palette,
         "  / search for tracks across providers",

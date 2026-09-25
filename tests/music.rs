@@ -29,6 +29,35 @@ fn connected() -> App {
     }
 }
 
+fn named_track(id: &str) -> Media {
+    Media::parse(
+        &json!({
+            "name": format!("Fixture {id}"),
+            "uri": format!("library://track/{id}"),
+            "media_type": "track"
+        }),
+        "",
+    )
+}
+
+fn assert_queue_menu(app: &mut App, key: KeyCode, replace: Action, add: Action) {
+    assert_eq!(press(app, key), Action::None);
+    let menu = app.menu.as_ref().expect("queue choices open");
+    assert_eq!(menu.player, app.selected_id);
+    assert_eq!(menu.entries.len(), 2);
+    assert!(menu.entries.iter().all(|entry| entry.action.needs_player()));
+    assert_eq!(menu.entries[0].label, "Replace queue");
+    assert_eq!(menu.entries[0].action, replace);
+    assert_eq!(menu.entries[1].label, "Add to queue");
+    assert_eq!(menu.entries[1].action, add);
+    assert_eq!(press(app, KeyCode::Enter), replace);
+    assert!(app.menu.is_none());
+    assert_eq!(press(app, key), Action::None);
+    press(app, KeyCode::Down);
+    assert_eq!(press(app, KeyCode::Enter), add);
+    assert!(app.menu.is_none());
+}
+
 #[test]
 fn navigation_is_read_only_and_back_rejects_late_responses() {
     let mut app = App::default();
@@ -200,6 +229,300 @@ fn folders_are_not_playable_and_terminal_controls_are_removed() {
         Some(Target::Providers {
             path: Some("provider://browse/abc".into())
         })
+    );
+}
+
+#[test]
+fn selecting_tracks_toggles_by_uri_and_offers_queue_choices_in_visible_order() {
+    let mut app = connected();
+    app.music.page.items = vec![
+        named_track("first"),
+        named_track("second"),
+        named_track("third"),
+        named_track("second"),
+    ];
+
+    app.music.page.cursor = 2;
+    assert_eq!(press(&mut app, KeyCode::Char('x')), Action::None);
+    press(&mut app, KeyCode::Home);
+    assert_eq!(press(&mut app, KeyCode::Char('x')), Action::None);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(press(&mut app, KeyCode::Char('x')), Action::None);
+    let uris = vec![
+        "library://track/first".into(),
+        "library://track/second".into(),
+        "library://track/third".into(),
+    ];
+    assert_queue_menu(
+        &mut app,
+        KeyCode::Char('A'),
+        Action::PlayMany(uris.clone()),
+        Action::EnqueueMany(uris),
+    );
+
+    press(&mut app, KeyCode::End);
+    press(&mut app, KeyCode::Char('x'));
+    let uris = vec![
+        "library://track/first".into(),
+        "library://track/third".into(),
+    ];
+    assert_queue_menu(
+        &mut app,
+        KeyCode::Char('A'),
+        Action::PlayMany(uris.clone()),
+        Action::EnqueueMany(uris),
+    );
+    assert_eq!(app.music.page.selected.len(), 2);
+}
+
+#[test]
+fn selected_track_menu_rechecks_the_selected_speaker_before_submission() {
+    let mut app = connected();
+    app.music.page.items = vec![named_track("one")];
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(press(&mut app, KeyCode::Char('A')), Action::None);
+    assert_eq!(
+        app.menu.as_ref().unwrap().player.as_deref(),
+        Some("speaker")
+    );
+
+    app.selected_id = Some("different".into());
+    assert_eq!(press(&mut app, KeyCode::Enter), Action::None);
+    assert!(app.menu.is_none());
+    assert!(app.status.contains("Player disconnected"));
+}
+
+#[test]
+fn selection_survives_reload_only_for_still_playable_visible_tracks() {
+    let mut app = connected();
+    app.music
+        .navigate(Target::RecentlyAdded, "Recently added".into());
+    app.music.apply(
+        app.music.generation,
+        Ok((
+            vec![
+                named_track("gone"),
+                named_track("kept"),
+                named_track("unavailable"),
+            ],
+            None,
+        )),
+    );
+    for index in 0..3 {
+        app.music.page.cursor = index;
+        press(&mut app, KeyCode::Char('x'));
+    }
+    assert_eq!(app.music.page.selected.len(), 3);
+
+    app.music.reload();
+    assert_eq!(press(&mut app, KeyCode::Char('A')), Action::None);
+    app.music
+        .apply(app.music.generation, Err("Fixture listing failed".into()));
+    assert_eq!(
+        app.music.page.selected.len(),
+        3,
+        "failed loads do not prune"
+    );
+    app.music.reload();
+    let mut unavailable = named_track("unavailable");
+    unavailable.available = false;
+    app.music.apply(
+        app.music.generation,
+        Ok((vec![unavailable, named_track("kept")], None)),
+    );
+    assert_eq!(app.music.page.selected.len(), 1);
+    assert!(app.music.page.selected.contains("library://track/kept"));
+    let uris = vec!["library://track/kept".into()];
+    assert_queue_menu(
+        &mut app,
+        KeyCode::Char('A'),
+        Action::PlayMany(uris.clone()),
+        Action::EnqueueMany(uris),
+    );
+}
+
+#[test]
+fn browser_history_restores_selection_but_new_and_replaced_pages_start_empty() {
+    let mut app = connected();
+    app.music
+        .navigate(Target::RecentlyAdded, "Recently added".into());
+    app.music.apply(
+        app.music.generation,
+        Ok((vec![named_track("first"), named_track("second")], None)),
+    );
+    press(&mut app, KeyCode::Down);
+    press(&mut app, KeyCode::Char('x'));
+
+    app.music
+        .navigate(Target::RecentlyPlayed, "Recently played".into());
+    assert!(
+        app.music.page.selected.is_empty(),
+        "navigation starts empty"
+    );
+    app.music
+        .apply(app.music.generation, Ok((vec![named_track("other")], None)));
+    press(&mut app, KeyCode::Char('x'));
+    press(&mut app, KeyCode::Backspace);
+    assert_eq!(app.music.page.cursor, 1);
+    let uris = vec!["library://track/second".into()];
+    assert_queue_menu(
+        &mut app,
+        KeyCode::Char('A'),
+        Action::PlayMany(uris.clone()),
+        Action::EnqueueMany(uris),
+    );
+    assert_eq!(app.music.page.selected.len(), 1);
+
+    app.music.replace(Target::RecentlyAdded);
+    assert!(
+        app.music.page.selected.is_empty(),
+        "replacement starts empty"
+    );
+    assert_eq!(press(&mut app, KeyCode::Char('A')), Action::None);
+}
+
+#[test]
+fn multi_selection_ignores_collections_folders_and_unavailable_tracks() {
+    let mut app = connected();
+    let folder = Media::parse(
+        &json!({"name":"Folder","media_type":"folder","path":"provider://browse/folder","uri":"provider://folder/1","is_playable":true}),
+        "",
+    );
+    let mut unavailable = named_track("unavailable");
+    unavailable.available = false;
+    let mut unplayable = named_track("unplayable");
+    unplayable.playable = false;
+    app.music.page.items = vec![
+        folder,
+        Media::parse(
+            &json!({"name":"Album","media_type":"album","uri":"library://album/1"}),
+            "",
+        ),
+        Media::parse(
+            &json!({"name":"Playlist","media_type":"playlist","uri":"library://playlist/1"}),
+            "",
+        ),
+        unavailable,
+        unplayable,
+        named_track("good"),
+    ];
+    for index in 0..5 {
+        app.music.page.cursor = index;
+        assert_eq!(press(&mut app, KeyCode::Char('x')), Action::None);
+        assert!(app.music.page.selected.is_empty());
+    }
+    app.music.page.cursor = 5;
+    press(&mut app, KeyCode::Char('x'));
+    let uris = vec!["library://track/good".into()];
+    assert_queue_menu(
+        &mut app,
+        KeyCode::Char('A'),
+        Action::PlayMany(uris.clone()),
+        Action::EnqueueMany(uris),
+    );
+}
+
+#[test]
+fn queueing_without_a_selection_reports_it_without_queueing() {
+    let mut app = connected();
+    app.music.page.items = vec![named_track("one")];
+    assert_eq!(press(&mut app, KeyCode::Char('A')), Action::None);
+    assert!(
+        app.status.contains("selected") && app.status.len() < 80,
+        "the reason must be concise and about selection, not speaker playback"
+    );
+    assert!(app.music.page.selected.is_empty());
+
+    press(&mut app, KeyCode::Char('x'));
+    app.connected = false;
+    assert_eq!(press(&mut app, KeyCode::Char('A')), Action::None);
+    assert!(app.menu.is_none());
+    assert!(
+        app.music.page.selected.contains("library://track/one"),
+        "losing the speaker must not discard the local selection"
+    );
+}
+
+#[test]
+fn folder_and_collection_queue_choices_preserve_browse_target_and_uri() {
+    let mut app = connected();
+    let path = "provider://browse/folder";
+    let folder = Media::parse(
+        &json!({"name":"Folder","media_type":"folder","path":path,"uri":"provider://folder/1","available":false}),
+        "",
+    );
+    assert!(!folder.playable);
+    app.music.page.items = vec![folder];
+    let generation = app.music.generation;
+    let target = Target::Providers {
+        path: Some(path.into()),
+    };
+    assert_queue_menu(
+        &mut app,
+        KeyCode::Char('a'),
+        Action::PlayFolder(target.clone()),
+        Action::EnqueueFolder(target),
+    );
+    assert_eq!(
+        app.music.generation, generation,
+        "UI does not load children"
+    );
+    app.selected_id = None;
+    assert_eq!(press(&mut app, KeyCode::Char('a')), Action::None);
+    assert!(app.menu.is_none());
+    app.selected_id = Some("speaker".into());
+    assert_eq!(press(&mut app, KeyCode::Char('N')), Action::None);
+
+    for (kind, uri) in [
+        ("album", "library://album/album1"),
+        ("playlist", "library://playlist/list1"),
+    ] {
+        app.music.page.items = vec![Media::parse(
+            &json!({"name":"Collection","media_type":kind,"uri":uri,"item_id":"1","provider":"library"}),
+            "",
+        )];
+        assert_queue_menu(
+            &mut app,
+            KeyCode::Char('a'),
+            Action::Play(uri.into()),
+            Action::Enqueue(uri.into()),
+        );
+    }
+    app.connected = false;
+    assert_eq!(press(&mut app, KeyCode::Char('a')), Action::None);
+    assert!(app.menu.is_none());
+}
+
+#[test]
+fn music_rows_show_selection_independently_of_cursor_highlight() {
+    let mut app = connected();
+    app.music.page.title = "Tracks".into();
+    app.music.page.items = vec![named_track("one"), named_track("two")];
+    press(&mut app, KeyCode::Char('x'));
+    press(&mut app, KeyCode::Down);
+
+    let width = 60;
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 8))
+        .expect("create test terminal");
+    terminal
+        .draw(|frame| ma_tui::music::draw(frame, &app, frame.area()))
+        .expect("render browser");
+    let buffer = terminal.backend().buffer();
+    let lines: Vec<String> = buffer
+        .content
+        .chunks(width as usize)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+        .collect();
+    assert!(lines.iter().any(|line| line.contains("1 selected")));
+    assert!(
+        lines.iter().any(|line| line.contains("[x] ♪ Fixture one")),
+        "selected row keeps its marker when the cursor leaves"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("▸ [ ] ♪ Fixture two")),
+        "cursor highlighting is a separate visual state"
     );
 }
 
@@ -560,9 +883,12 @@ fn filter_input_replaces_library_page_and_cancels_without_change() {
     };
     app.music.page.title = "Albums".into();
     app.music.page.items = vec![track(), track()];
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(app.music.page.selected.len(), 1);
     let ctrl_f = || KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
     assert_eq!(app.key(ctrl_f()), Action::None);
     assert!(app.music.filtering);
+    assert_eq!(app.music.page.selected.len(), 1, "editing keeps selection");
     for c in "new".chars() {
         assert_eq!(press(&mut app, KeyCode::Char(c)), Action::None);
     }
@@ -595,6 +921,10 @@ fn filter_input_replaces_library_page_and_cancels_without_change() {
     let applied = app.music.page.target.clone();
     assert!(!app.music.filtering);
     assert!(app.music.filter_input.is_empty());
+    assert!(
+        app.music.page.selected.is_empty(),
+        "applying a filter replaces the page"
+    );
     assert!(
         app.music.history.is_empty(),
         "filtering does not create history"

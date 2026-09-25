@@ -9,6 +9,190 @@ fn display(text: String) -> String {
     text.chars().filter(|c| !c.is_control()).take(512).collect()
 }
 
+fn codec_label(raw: &str) -> Option<&str> {
+    if raw.len() > 32 {
+        return None;
+    }
+    let raw = raw.trim();
+    let codec = if raw
+        .get(..6)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("audio/"))
+    {
+        &raw[6..]
+    } else {
+        raw
+    };
+    let codec = if codec
+        .get(..2)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("x-"))
+    {
+        &codec[2..]
+    } else {
+        codec
+    };
+    let codec = if codec.eq_ignore_ascii_case("mpeg") {
+        "mp3"
+    } else {
+        codec
+    };
+    (!codec.is_empty()
+        && codec.len() <= 12
+        && !codec.eq_ignore_ascii_case("unknown")
+        && codec
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+    .then_some(codec)
+}
+
+fn audio_codec(format: &serde_json::Value) -> Option<&str> {
+    format["codec_type"]
+        .as_str()
+        .and_then(codec_label)
+        .or_else(|| format["content_type"].as_str().and_then(codec_label))
+}
+
+fn mapped_audio_format(mapping: &serde_json::Value) -> Option<&serde_json::Value> {
+    mapping
+        .get("audio_format")
+        .filter(|format| audio_codec(format).is_some())
+}
+
+/// A short status for the local speaker, followed only by file information
+/// supplied by the current MA queue item (never by the output stream).
+pub fn local_audio_line(state: &str, queue_details: &serde_json::Value) -> String {
+    use std::fmt::Write;
+
+    let state = state.trim();
+    let state = if !state.is_empty()
+        && state.len() <= 16
+        && state.bytes().all(|b| b.is_ascii_lowercase() || b == b'-')
+    {
+        state
+    } else {
+        "unknown"
+    };
+    let mut line = format!("Local audio · {state}");
+    let current = &queue_details["current_item"];
+    let media = &current["media_item"];
+    // Streamdetails describes the queued file. A library mapping may describe
+    // another version, so never use its quality while streamdetails is present.
+    let format = if let Some(stream) = current.get("streamdetails").filter(|v| v.is_object()) {
+        stream
+            .get("audio_format")
+            .filter(|v| audio_codec(v).is_some())
+    } else {
+        let mappings = media["provider_mappings"].as_array();
+        // Prefer the current provider when identifiable; otherwise take the
+        // first mapping with usable audio format information.
+        mappings
+            .and_then(|mappings| {
+                let provider = media["provider"].as_str();
+                let item_id = media["item_id"].as_str();
+                mappings
+                    .iter()
+                    .filter(|mapping| {
+                        provider.is_some_and(|provider| {
+                            mapping["provider_instance"].as_str() == Some(provider)
+                                || mapping["provider_domain"].as_str() == Some(provider)
+                        }) && item_id.is_some_and(|id| mapping["item_id"].as_str() == Some(id))
+                    })
+                    .find_map(mapped_audio_format)
+                    .or_else(|| mappings.iter().find_map(mapped_audio_format))
+            })
+            .or_else(|| {
+                media
+                    .pointer("/metadata/audio_format")
+                    .filter(|v| audio_codec(v).is_some())
+            })
+    };
+    let Some(format) = format else {
+        return line;
+    };
+    let Some(codec) = audio_codec(format) else {
+        return line;
+    };
+
+    line.push_str(" · ");
+    line.extend(codec.bytes().map(|b| b.to_ascii_uppercase() as char));
+    // Numeric limits keep server-supplied metadata sensible and the full line
+    // under 80 visible characters, even when every optional field is present.
+    if let Some(bps) = format["bit_rate"]
+        .as_u64()
+        .filter(|bps| (1_000..=10_000_000).contains(bps))
+    {
+        let _ = write!(line, " {} kbps", (bps + 500) / 1_000);
+    }
+    if let Some(rate) = format["sample_rate"]
+        .as_u64()
+        .filter(|rate| (8_000..=384_000).contains(rate))
+    {
+        if rate % 1_000 == 0 {
+            let _ = write!(line, " {} kHz", rate / 1_000);
+        } else if rate % 100 == 0 {
+            let _ = write!(line, " {}.{} kHz", rate / 1_000, (rate % 1_000) / 100);
+        }
+    }
+    if let Some(depth) = format["bit_depth"]
+        .as_u64()
+        .filter(|depth| (8..=64).contains(depth))
+    {
+        let _ = write!(line, " {depth}-bit");
+    }
+    match format["channels"].as_u64() {
+        Some(1) => line.push_str(" mono"),
+        Some(2) => line.push_str(" stereo"),
+        Some(channels @ 3..=8) => {
+            let _ = write!(line, " {channels}ch");
+        }
+        _ => {}
+    }
+    line
+}
+
+/// Return a fixed, safe reconnect reason. Runtime error text may include peer
+/// input, so it is never rendered directly.
+fn audio_status_hint(state: &str, detail: &str) -> Option<&'static str> {
+    match (state, detail) {
+        (
+            "reconnecting",
+            "Audio proxy connection failed"
+            | "Audio proxy authentication send failed"
+            | "Audio proxy authentication failed"
+            | "Audio proxy authentication timed out"
+            | "Sendspin handshake timed out"
+            | "Sendspin handshake failed",
+        ) => Some("connection failed"),
+        ("reconnecting", "Audio proxy disconnected" | "Audio connection closed") => {
+            Some("connection lost")
+        }
+        (
+            "reconnecting",
+            "Audio receive queue overflow" | "Audio worker queue full or unavailable",
+        ) => Some("receiver overloaded"),
+        ("failed", "Audio worker queue overflow") => Some("worker queue overflow"),
+        ("failed", "Audio output failed" | "Audio worker stopped") => Some("output stopped"),
+        _ => None,
+    }
+}
+
+/// A local-audio status with an optional fixed reconnect reason. The reason is
+/// deliberately a small allowlist rather than the raw runtime detail.
+pub fn local_audio_status_line(
+    state: &str,
+    detail: &str,
+    queue_details: &serde_json::Value,
+) -> String {
+    let mut line = local_audio_line(state, queue_details);
+    let Some(hint) = audio_status_hint(state.trim(), detail) else {
+        return line;
+    };
+    let state_end = line["Local audio · ".len()..]
+        .find(" · ")
+        .map_or(line.len(), |offset| "Local audio · ".len() + offset);
+    line.insert_str(state_end, &format!(" · {hint}"));
+    line
+}
+
 /// A library event names its library URI, while rows may be provider mappings.
 fn matches_media(media: &Media, uri: &str, item: Option<&serde_json::Value>) -> bool {
     (!uri.is_empty() && media.uri == uri)

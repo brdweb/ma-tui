@@ -32,7 +32,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif cmd == "player_queues/items":
             body = [{"queue_item_id":"item1","name":"Fixture song","duration":200}]
         elif cmd == "music/search":
-            body = {"tracks":[{"name":"Search fixture","uri":"library://track/1","artists":[{"name":"Fixture artist"}]}]}
+            body = {"tracks":[
+                {"name":"Search fixture one","uri":"library://track/1","artists":[{"name":"Fixture artist"}]},
+                {"name":"Search fixture two","uri":"library://track/2","artists":[{"name":"Fixture artist"}]},
+            ]}
         elif cmd == "music/in_progress_items":
             assert req["args"] == {"limit":100}
             body = [{"name":"Fixture episode","item_id":"ep1","provider":"abs","media_type":"podcast_episode",
@@ -74,10 +77,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             assert req["args"] == {"player_id":"member"}
             body = None
         else:
-            assert cmd in ("player_queues/play_pause", "player_queues/play_media", "player_queues/delete_item", "player_queues/save_as_playlist"), cmd
+            assert cmd in ("player_queues/play_pause", "player_queues/play_media", "player_queues/delete_item", "player_queues/save_as_playlist", "player_queues/clear"), cmd
             assert req["args"]["queue_id"] == "leader"
             if cmd == "player_queues/save_as_playlist":
                 assert req["args"]["name"] == "Smoke list"
+            if cmd == "player_queues/clear":
+                assert req["args"] == {"queue_id":"leader"}
             body = None
         data = json.dumps(body).encode()
         self.send_response(200)
@@ -167,9 +172,29 @@ with tempfile.TemporaryDirectory(prefix="ma-tui-smoke-") as tmp:
         os.write(master,b" ")
         until(lambda:any(c["command"]=="player_queues/play_pause" for c in calls))
         os.write(master,b"/fixture\r")
-        visible("Search fixture")
-        os.write(master,b"a")
-        until(lambda:any(c["command"]=="player_queues/play_media" and c["args"]["option"]=="add" for c in calls))
+        visible("Search fixture one")
+        visible("Search fixture two")
+        # Select two result rows, then replace the queue in display order.
+        os.write(master,b"x\x1b[BxA\r")
+        until(lambda:any(
+            c["command"]=="player_queues/play_media"
+            and c["args"] == {"queue_id":"leader","media":"library://track/1","option":"replace"}
+            for c in calls
+        ))
+        until(lambda:any(
+            c["command"]=="player_queues/play_media"
+            and c["args"] == {"queue_id":"leader","media":"library://track/2","option":"add"}
+            for c in calls
+        ))
+        # The second choice appends the same selected tracks.
+        os.write(master,b"Aj\r")
+        until(lambda:all(any(
+            c["command"]=="player_queues/play_media"
+            and c["args"] == {"queue_id":"leader","media":uri,"option":"add"}
+            for c in calls
+        ) for uri in ("library://track/1","library://track/2")))
+        os.write(master,b"\x1b[Aa")
+        until(lambda:any(c["command"]=="player_queues/play_media" and c["args"] == {"queue_id":"leader","media":"library://track/1","option":"add"} for c in calls))
         os.write(master,b"\r")
         visible("Play now (replace queue)")
         os.write(master,b"\r")
@@ -186,8 +211,10 @@ with tempfile.TemporaryDirectory(prefix="ma-tui-smoke-") as tmp:
         visible("SAVE QUEUE AS PLAYLIST…")
         os.write(master,b"Smoke list\r")
         until(lambda:any(c["command"]=="player_queues/save_as_playlist" and c["args"] == {"queue_id":"leader","name":"Smoke list"} for c in calls))
-        os.write(master,b"\x1bOS")  # F4 focuses the queue; Esc now cancels or steps back.
+        os.write(master,b"\x1bOS")  # F4 focuses the queue; c clears the active queue.
         visible("QUEUE")
+        os.write(master,b"c")
+        until(lambda:any(c["command"]=="player_queues/clear" and c["args"] == {"queue_id":"leader"} for c in calls))
         os.write(master,b"\x1b[3~")
         until(lambda:any(c["command"]=="player_queues/delete_item" and c["args"]["item_id_or_index"]=="item1" for c in calls))
         os.write(master,b"q")

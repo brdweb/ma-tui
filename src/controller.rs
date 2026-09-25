@@ -364,6 +364,16 @@ async fn execute(api: &ApiClient, request: Request) -> anyhow::Result<Option<&'s
                 Action::Seek(position) => api.control(&player, Control::Seek(position)).await?,
                 Action::Play(uri) => api.play_uri(&player, &uri).await?,
                 Action::Enqueue(uri) => api.enqueue_uri(&player, &uri).await?,
+                Action::PlayMany(uris) => api.play_uris(&player, &uris).await?,
+                Action::EnqueueMany(uris) => api.enqueue_uris(&player, &uris).await?,
+                Action::PlayFolder(target) => {
+                    let uris = folder_uris(api, &target).await?;
+                    api.play_uris(&player, &uris).await?;
+                }
+                Action::EnqueueFolder(target) => {
+                    let uris = folder_uris(api, &target).await?;
+                    api.enqueue_uris(&player, &uris).await?;
+                }
                 Action::PlayNext(uri) => api.play_next_uri(&player, &uri).await?,
                 Action::StartRadio(uri) => {
                     api.start_radio(&player, &uri).await?;
@@ -375,4 +385,20 @@ async fn execute(api: &ApiClient, request: Request) -> anyhow::Result<Option<&'s
             Ok(None)
         }
     }
+}
+
+async fn folder_uris(
+    api: &ApiClient,
+    target: &crate::music::Target,
+) -> anyhow::Result<Vec<String>> {
+    let (items, _) = api.browse(target).await?;
+    let uris: Vec<_> = items
+        .into_iter()
+        .filter(|item| item.available && item.playable && !item.uri.is_empty())
+        .map(|item| item.uri)
+        .collect();
+    if uris.is_empty() {
+        return Err(anyhow::anyhow!("Folder has no available playable items"));
+    }
+    Ok(uris)
 }

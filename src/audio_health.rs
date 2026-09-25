@@ -717,11 +717,16 @@ mod tests {
             fn begin(&mut self, _: AudioFormat, _: SharedClock, _: Gain) -> anyhow::Result<()> {
                 Ok(())
             }
-            fn write(&mut self, _: AudioBuffer) {}
+            fn write(&mut self, _: AudioBuffer) -> bool {
+                true
+            }
             fn clear(&mut self) {}
             fn gain(&mut self, _: Gain) {}
             fn failed(&self) -> bool {
                 false
+            }
+            fn recovering(&self) -> bool {
+                self.health.is_recovering()
             }
             fn poll_failure(&mut self) -> Option<(bool, String)> {
                 let mut state = self.state.lock();

@@ -50,6 +50,10 @@ other distributions use the Flatpak, the x86-64 archive, or
 [build from source](#build-and-local-install). Run MA-TUI as your normal desktop
 user, not with `sudo`.
 
+Native and Flatpak packages install the MA-TUI icon in the desktop application
+catalog; it identifies this terminal-launched application without changing its
+terminal-first interface.
+
 ## Getting started
 
 ```sh
@@ -108,7 +112,19 @@ one exists. Do not put tokens in TOML or Git; prefer HTTPS outside a trusted LAN
 
 The player sits on top; the speakers and queue fill the left column and the music
 browser, search results or a menu the right, so the queue stays visible while you
-browse. The bottom two lines list the keys for the focused pane and the transport.
+browse. The bottom audio line shows `Local audio ·` followed by its state, or
+`Local audio · disabled` when local playback is off. `connected` means the
+local-audio session is connected but may still await a stream or audio;
+`buffering` means a stream is configured but has not yet delivered playable audio
+(or was cleared). `ready` means a nonempty decoded audio buffer for the current
+stream has been accepted by the local output path, not merely that the server
+connected or announced a stream; it does not guarantee sound from the speakers.
+`recovering` reports transient output recovery. With local playback enabled,
+Music Assistant's current queue-item metadata may add compact file details such
+as `FLAC 96 kHz 24-bit stereo` or `MP3 320 kbps`. Failed and reconnecting
+states show a short fixed connection/output reason, never raw server or driver
+diagnostics.
+The bottom two hint lines name the keys for the focused pane and the transport.
 
 Select a speaker with Enter, then browse the **Music** pane. Home opens with
 **Continue listening**, **Unplayed podcasts**, **Recently added**, **Recently
@@ -118,8 +134,9 @@ offers **Play now (replace queue)**, **Play next**, or **Add to queue**, naming 
 destination speaker. Its **Start radio** entry replaces the queue with a radio
 playlist. Its Library section adds or removes favourites, adds a provider item to
 the library, and opens **Add to playlist…** for editable playlists. Press **P** on
-an album, playlist or podcast to choose playback for the whole collection, or to
-mark an episode or audiobook played. Browsing does not start playback.
+an item to open its full playback menu, including album, playlist and podcast
+operations or marking an episode or audiobook played. Browsing does not start
+playback.
 
 | Key | Action |
 | --- | --- |
@@ -134,11 +151,14 @@ mark an episode or audiobook played. Browsing does not start playback.
 | Left / Right | Seek backward/forward 10 seconds |
 | / | Search; Enter submits, Esc cancels |
 | b / F3 | Open music browser |
-| Enter in music/search | Open collection or choose playback for an item |
-| P in music/search | Choose playback for the whole item, or mark it played |
+| Enter in music/search | Open a collection/folder, or open a playable item's menu |
+| P in music/search | Open the full playback menu for the highlighted item |
 | f in music/search | Toggle favourite on the highlighted item |
 | F | Toggle favourite on the now-playing item |
-| a / N in music/search | Add to queue / play next |
+| x in music/search | Select or deselect an available, playable track |
+| A in music/search | Choose Replace queue or Add to queue for selected tracks in displayed order |
+| a in music/search | Add a playable single item immediately; choose replace/add for an album, playlist or folder |
+| N in music/search | Play the highlighted item next |
 | Backspace in music | Go back, restoring the previous selection |
 | [ / ] in music | Previous / next library page (100 items per page) |
 | o in music | Cycle the library sort |
@@ -147,11 +167,32 @@ mark an episode or audiobook played. Browsing does not start playback.
 | Esc | Leave search, go back in the browser, or close a menu |
 | Enter in queue | Play highlighted existing queue item |
 | Delete in queue | Remove highlighted item |
+| c in queue | Clear the active queue and stop playback |
 | Shift-J / Shift-K in queue | Move item down/up |
 | ? / F1 | Open playback/player controls |
 | F2 | Connection settings (temporarily disconnects local speaker) |
 | r | Reload the music listing, or refresh player/queue state |
 | q / Ctrl-C | Quit and restore terminal |
+
+Press **x** on an available, playable track in Music or Search to toggle its
+selection mark; albums, playlists and folders cannot be selected. **A** opens a
+two-choice **Replace queue** / **Add to queue** menu for the selected tracks in
+displayed order. Selections stay with each Music page across Back and separately
+with search results; a new page or submitted search starts fresh, and a
+successful Music page reload drops marks for tracks no longer listed.
+
+**a** immediately adds a highlighted available, playable single item by its
+own URI (for example, a track). On an album or playlist, **a** instead offers
+**Replace queue** / **Add to queue**, sending that URI unchanged for Music
+Assistant to expand. For a provider folder, **a** offers the same choices; the
+folder is read once without opening it, using its
+immediately listed available, playable items in order, not subfolders. An empty
+playable folder reports an error. Multi-track replace starts with the first URI
+and adds the remaining URIs in order; add queues the URIs in order. Operations
+stop on the first failure without undoing earlier changes.
+
+With Queue focused, **c** clears its current queue and stops playback. This
+requires an active queue; it never guesses an empty queue ID.
 
 The controls menu covers transport and external sources, mute, power,
 individual/group volume, absolute seek, sleep timers, grouping, sound modes,
@@ -202,8 +243,9 @@ notification for each new track while playing, replacing the previous one.
 MA-TUI rereads Omarchy's `colors.toml` every 500 ms, supporting both the current
 `~/.local/state/omarchy/current/theme/` layout and the older
 `~/.config/omarchy/current/theme/` one, and keeps the last valid palette while a
-theme directory is replaced. No Omarchy files are changed. Without a palette it
-uses terminal colors; `NO_COLOR` disables color entirely.
+theme directory is replaced. No Omarchy files are changed. Native launches honor
+`NO_COLOR`; the Flatpak clears inherited `NO_COLOR` so its Omarchy palette remains
+visible.
 
 ## Build and local install
 

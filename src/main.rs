@@ -51,7 +51,6 @@ fn demo() -> App {
         title: "Sample track — offline preview".into(),
         artist: "Fictional artist · no audio or network".into(),
         status: "Offline demo: controls do not affect any server".into(),
-        audio_status: "Sendspin 0.3.7 · disabled in demo".into(),
         selected_id: Some("demo".into()),
         players: vec![PlayerView {
             details: serde_json::Value::Null,
@@ -318,7 +317,11 @@ async fn main() -> Result<()> {
                 }
                 if let Some(status) = &audio_status {
                     let status = status.borrow();
-                    let line = format!("Local audio · {} · {}", status.state, status.detail);
+                    let line = ma_tui::presentation::local_audio_status_line(
+                        &status.state,
+                        &status.detail,
+                        &app.queue_details,
+                    );
                     if line != app.audio_status {
                         app.audio_status = line;
                         changed = true;

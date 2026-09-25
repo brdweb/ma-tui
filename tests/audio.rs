@@ -76,7 +76,7 @@ fn pcm_decoder_validates_negotiated_format_and_frame_alignment() {
 
 // This output records decoded samples instead of opening CPAL. All transport,
 // Sendspin negotiation, command processing, decoding and worker code is real.
-struct FixtureOutput(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+struct FixtureOutput(std::sync::Arc<parking_lot::Mutex<Vec<String>>>);
 impl audio::Output for FixtureOutput {
     fn formats(&self) -> anyhow::Result<Vec<sendspin::protocol::messages::AudioFormatSpec>> {
         Ok(vec![sendspin::protocol::messages::AudioFormatSpec {
@@ -92,26 +92,61 @@ impl audio::Output for FixtureOutput {
         _: audio::SharedClock,
         _: audio::Gain,
     ) -> anyhow::Result<()> {
-        self.0.lock().unwrap().push(format!(
+        self.0.lock().push(format!(
             "begin:{}",
             std::thread::current().name().unwrap_or("unnamed")
         ));
         Ok(())
     }
-    fn write(&mut self, buffer: sendspin::audio::AudioBuffer) {
+    fn write(&mut self, buffer: sendspin::audio::AudioBuffer) -> bool {
         self.0
             .lock()
-            .unwrap()
             .push(format!("samples:{}", buffer.samples.len()));
+        true
     }
     fn clear(&mut self) {
-        self.0.lock().unwrap().push("clear".into());
+        self.0.lock().push("clear".into());
     }
     fn gain(&mut self, gain: audio::Gain) {
-        self.0.lock().unwrap().push(format!(
+        self.0.lock().push(format!(
             "gain:{}:{}:{}",
             gain.volume, gain.muted, gain.delay
         ));
+    }
+    fn failed(&self) -> bool {
+        false
+    }
+}
+
+struct BlockingFixture {
+    output: FixtureOutput,
+    began: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    release: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl audio::Output for BlockingFixture {
+    fn formats(&self) -> anyhow::Result<Vec<sendspin::protocol::messages::AudioFormatSpec>> {
+        self.output.formats()
+    }
+    fn begin(
+        &mut self,
+        format: sendspin::audio::AudioFormat,
+        clock: audio::SharedClock,
+        gain: audio::Gain,
+    ) -> anyhow::Result<()> {
+        self.began.store(true, std::sync::atomic::Ordering::Release);
+        while !self.release.load(std::sync::atomic::Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.output.begin(format, clock, gain)
+    }
+    fn write(&mut self, buffer: sendspin::audio::AudioBuffer) -> bool {
+        self.output.write(buffer)
+    }
+    fn clear(&mut self) {
+        self.output.clear();
+    }
+    fn gain(&mut self, gain: audio::Gain) {
+        self.output.gain(gain);
     }
     fn failed(&self) -> bool {
         false
@@ -144,7 +179,7 @@ async fn authenticated_session_decodes_on_worker_confirms_commands_and_stops() {
     use tokio_tungstenite::tungstenite::Message as Ws;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let events = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
     let output_events = events.clone();
     let assertions = events.clone();
     let (sent, received) = tokio::sync::oneshot::channel();
@@ -168,12 +203,7 @@ async fn authenticated_session_decodes_on_worker_confirms_commands_and_stops() {
         // Wait for the real worker to acknowledge format setup before data.
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if output_events
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .any(|x| x.starts_with("begin:"))
-                {
+                if output_events.lock().iter().any(|x| x.starts_with("begin:")) {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
@@ -223,7 +253,7 @@ async fn authenticated_session_decodes_on_worker_confirms_commands_and_stops() {
         .await
         .unwrap();
     fixture.await.unwrap();
-    let log = assertions.lock().unwrap();
+    let log = assertions.lock();
     assert!(log.iter().any(|x| x == "begin:ma-tui-audio"));
     assert!(log.iter().any(|x| x == "samples:2"));
     assert!(log.iter().any(|x| x == "gain:62:false:123"));
@@ -334,9 +364,10 @@ impl audio::Output for SlowFixture {
     ) -> anyhow::Result<()> {
         self.0.begin(f, c, g)
     }
-    fn write(&mut self, b: sendspin::audio::AudioBuffer) {
-        self.0.write(b);
+    fn write(&mut self, b: sendspin::audio::AudioBuffer) -> bool {
+        let accepted = self.0.write(b);
         std::thread::sleep(Duration::from_millis(40));
+        accepted
     }
     fn clear(&mut self) {
         self.0.clear();
@@ -353,7 +384,7 @@ async fn stream_end_invalidates_audio_already_queued_to_worker() {
     use tokio_tungstenite::tungstenite::Message as Ws;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let events = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
     let output = events.clone();
     let observations = events.clone();
     let fixture = tokio::spawn(async move {
@@ -364,12 +395,7 @@ async fn stream_end_invalidates_audio_already_queued_to_worker() {
         fixture_json(&mut ws).await;
         ws.send(Ws::text(r#"{"type":"server/hello","payload":{"server_id":"fixture","name":"Fixture","version":1,"active_roles":["player@v1"],"connection_reason":"playback"}}"#)).await.unwrap();
         ws.send(Ws::text(r#"{"type":"stream/start","payload":{"player":{"codec":"pcm","channels":2,"sample_rate":48000,"bit_depth":16}}}"#)).await.unwrap();
-        while !observations
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|x| x.starts_with("begin:"))
-        {
+        while !observations.lock().iter().any(|x| x.starts_with("begin:")) {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         for _ in 0..20 {
@@ -380,7 +406,6 @@ async fn stream_end_invalidates_audio_already_queued_to_worker() {
         }
         while !observations
             .lock()
-            .unwrap()
             .iter()
             .any(|x| x.starts_with("samples:"))
         {
@@ -392,7 +417,7 @@ async fn stream_end_invalidates_audio_already_queued_to_worker() {
         .await
         .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let log = observations.lock().unwrap();
+        let log = observations.lock();
         assert!(
             log.iter().filter(|x| x.starts_with("samples:")).count() <= 3,
             "stale audio drained after stream/end: {log:?}"
@@ -454,7 +479,7 @@ async fn rejected_proxy_auth_reconnects_with_backoff_and_shutdown_cancels_wait()
             }
         }
     });
-    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
     let handle =
         audio::start_with_output(config(base), move || Ok(FixtureOutput(events.clone()))).unwrap();
     let times = tokio::time::timeout(Duration::from_secs(3), wait)
@@ -623,7 +648,7 @@ async fn decoder_failure_reason_survives_worker_shutdown_without_peer_data() {
         ws.send(Ws::text(r#"{"type":"stream/start","payload":{"player":{"codec":"private-peer-value","channels":2,"sample_rate":48000,"bit_depth":16}}}"#)).await.unwrap();
         while let Some(Ok(_)) = ws.next().await {}
     });
-    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
     let mut handle =
         audio::start_with_output(config(base), move || Ok(FixtureOutput(events.clone()))).unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
@@ -651,7 +676,9 @@ impl audio::Output for FaultFixture {
     ) -> anyhow::Result<()> {
         Ok(())
     }
-    fn write(&mut self, _: sendspin::audio::AudioBuffer) {}
+    fn write(&mut self, _: sendspin::audio::AudioBuffer) -> bool {
+        false
+    }
     fn clear(&mut self) {}
     fn gain(&mut self, _: audio::Gain) {}
     fn failed(&self) -> bool {
@@ -869,12 +896,13 @@ impl audio::Output for RecoveringOutput {
         }
         Ok(())
     }
-    fn write(&mut self, buffer: sendspin::audio::AudioBuffer) {
+    fn write(&mut self, buffer: sendspin::audio::AudioBuffer) -> bool {
         self.state
             .lock()
             .unwrap()
             .writes
             .push((self.attempt, buffer.samples[0]));
+        true
     }
     fn clear(&mut self) {}
     fn gain(&mut self, _: audio::Gain) {}
@@ -1117,4 +1145,443 @@ async fn stream_creation_failure_recreates_output() {
         assert_eq!(state.lock().unwrap().opens, 2);
     }).await.unwrap();
     handle.shutdown().await;
+}
+
+type FixtureEvents = std::sync::Arc<parking_lot::Mutex<Vec<String>>>;
+
+async fn stream_fixture() -> (
+    String,
+    tokio::sync::mpsc::UnboundedSender<tokio_tungstenite::tungstenite::Message>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (commands, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let fixture = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        recovered_session(&mut ws).await;
+        while let Some(message) = received.recv().await {
+            if ws.send(message).await.is_err() {
+                break;
+            }
+        }
+    });
+    (base, commands, fixture)
+}
+
+async fn wait_fixture_state(
+    status: &mut tokio::sync::watch::Receiver<audio::AudioStatus>,
+    expected: &str,
+) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while status.borrow().state != expected {
+            status.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_fixture_event(events: &FixtureEvents, prefix: &str, count: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if events
+                .lock()
+                .iter()
+                .filter(|event| event.starts_with(prefix))
+                .count()
+                >= count
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn fixture_frame() -> tokio_tungstenite::tungstenite::Message {
+    let mut frame = vec![4];
+    frame.extend_from_slice(&0_i64.to_be_bytes());
+    frame.extend_from_slice(&[1, 0, 1, 0]);
+    tokio_tungstenite::tungstenite::Message::Binary(frame.into())
+}
+
+fn large_fixture_frame() -> tokio_tungstenite::tungstenite::Message {
+    let mut frame = vec![4];
+    frame.extend_from_slice(&0_i64.to_be_bytes());
+    frame.extend(std::iter::repeat_n(0, 600_000));
+    tokio_tungstenite::tungstenite::Message::Binary(frame.into())
+}
+
+const PCM_START: &str = r#"{"type":"stream/start","payload":{"player":{"codec":"pcm","channels":2,"sample_rate":48000,"bit_depth":16}}}"#;
+
+#[tokio::test]
+async fn ready_requires_accepted_audio_and_resets_on_clear_and_end() {
+    use tokio_tungstenite::tungstenite::Message as Ws;
+    let (base, commands, fixture) = stream_fixture().await;
+    let events = FixtureEvents::default();
+    let output = events.clone();
+    let handle =
+        audio::start_with_output(config(base), move || Ok(FixtureOutput(output.clone()))).unwrap();
+    let mut status = handle.status.clone();
+
+    wait_fixture_state(&mut status, "connected").await;
+    assert_eq!(status.borrow().state, "connected");
+    commands.send(Ws::text(PCM_START)).unwrap();
+    wait_fixture_state(&mut status, "buffering").await;
+    wait_fixture_event(&events, "begin:", 1).await;
+    assert_eq!(status.borrow().state, "buffering");
+
+    commands.send(fixture_frame()).unwrap();
+    wait_fixture_state(&mut status, "ready").await;
+    assert!(events.lock().iter().any(|event| event == "samples:2"));
+
+    let clears = events
+        .lock()
+        .iter()
+        .filter(|event| *event == "clear")
+        .count();
+    commands
+        .send(Ws::text(
+            r#"{"type":"stream/clear","payload":{"roles":["player"]}}"#,
+        ))
+        .unwrap();
+    wait_fixture_state(&mut status, "buffering").await;
+    wait_fixture_event(&events, "clear", clears + 1).await;
+    assert_eq!(status.borrow().state, "buffering");
+
+    commands.send(fixture_frame()).unwrap();
+    wait_fixture_state(&mut status, "ready").await;
+    commands.send(Ws::text(PCM_START)).unwrap();
+    wait_fixture_state(&mut status, "buffering").await;
+    wait_fixture_event(&events, "begin:", 3).await;
+    assert_eq!(status.borrow().state, "buffering");
+    let clears = events
+        .lock()
+        .iter()
+        .filter(|event| *event == "clear")
+        .count();
+    commands
+        .send(Ws::text(
+            r#"{"type":"stream/end","payload":{"roles":["player"]}}"#,
+        ))
+        .unwrap();
+    wait_fixture_state(&mut status, "connected").await;
+    wait_fixture_event(&events, "clear", clears + 1).await;
+    assert_eq!(status.borrow().state, "connected");
+
+    handle.shutdown().await;
+    drop(commands);
+    fixture.await.unwrap();
+}
+
+#[tokio::test]
+async fn cached_stream_burst_waits_for_output_open_without_reconnecting() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio_tungstenite::tungstenite::Message as Ws;
+
+    let (base, commands, fixture) = stream_fixture().await;
+    let events = FixtureEvents::default();
+    let began = std::sync::Arc::new(AtomicBool::new(false));
+    let release = std::sync::Arc::new(AtomicBool::new(false));
+    let output_events = events.clone();
+    let output_began = began.clone();
+    let output_release = release.clone();
+    let handle = audio::start_with_output(config(base), move || {
+        Ok(BlockingFixture {
+            output: FixtureOutput(output_events.clone()),
+            began: output_began.clone(),
+            release: output_release.clone(),
+        })
+    })
+    .unwrap();
+    let mut status = handle.status.clone();
+
+    wait_fixture_state(&mut status, "connected").await;
+    commands.send(Ws::text(PCM_START)).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !began.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for _ in 0..540 {
+        commands.send(fixture_frame()).unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let state_before_release = status.borrow().state.clone();
+    release.store(true, Ordering::Release);
+    assert_ne!(state_before_release, "reconnecting");
+    wait_fixture_state(&mut status, "ready").await;
+    wait_fixture_event(&events, "samples:", 540).await;
+
+    handle.shutdown().await;
+    drop(commands);
+    fixture.await.unwrap();
+}
+
+#[tokio::test]
+async fn encoded_worker_queue_overflow_fails_without_reconnect_loop() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio_tungstenite::tungstenite::Message as Ws;
+
+    let (base, commands, fixture) = stream_fixture().await;
+    let began = std::sync::Arc::new(AtomicBool::new(false));
+    let release = std::sync::Arc::new(AtomicBool::new(false));
+    let output_began = began.clone();
+    let output_release = release.clone();
+    let handle = audio::start_with_output(config(base), move || {
+        Ok(BlockingFixture {
+            output: FixtureOutput(FixtureEvents::default()),
+            began: output_began.clone(),
+            release: output_release.clone(),
+        })
+    })
+    .unwrap();
+    let mut status = handle.status.clone();
+
+    wait_fixture_state(&mut status, "connected").await;
+    commands.send(Ws::text(PCM_START)).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !began.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for _ in 0..4 {
+        commands.send(large_fixture_frame()).unwrap();
+    }
+    wait_fixture_state(&mut status, "failed").await;
+    assert_eq!(status.borrow().detail, "Audio worker queue overflow");
+    release.store(true, Ordering::Release);
+
+    handle.shutdown().await;
+    drop(commands);
+    fixture.await.unwrap();
+}
+
+struct ControlledFixture {
+    output: FixtureOutput,
+    accepts: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    recovering: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl audio::Output for ControlledFixture {
+    fn formats(&self) -> anyhow::Result<Vec<sendspin::protocol::messages::AudioFormatSpec>> {
+        self.output.formats()
+    }
+    fn begin(
+        &mut self,
+        format: sendspin::audio::AudioFormat,
+        clock: audio::SharedClock,
+        gain: audio::Gain,
+    ) -> anyhow::Result<()> {
+        self.output.begin(format, clock, gain)
+    }
+    fn write(&mut self, buffer: sendspin::audio::AudioBuffer) -> bool {
+        if !self.accepts.load(std::sync::atomic::Ordering::Acquire) {
+            self.output.0.lock().push("dropped".into());
+            return false;
+        }
+        self.output.write(buffer)
+    }
+    fn clear(&mut self) {
+        self.output.clear();
+    }
+    fn gain(&mut self, gain: audio::Gain) {
+        self.output.gain(gain);
+    }
+    fn failed(&self) -> bool {
+        false
+    }
+    fn recovering(&self) -> bool {
+        self.recovering.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+#[tokio::test]
+async fn rejected_output_never_promotes_and_removes_previous_ready() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio_tungstenite::tungstenite::Message as Ws;
+    let (base, commands, fixture) = stream_fixture().await;
+    let events = FixtureEvents::default();
+    let accepts = std::sync::Arc::new(AtomicBool::new(false));
+    let output_events = events.clone();
+    let output_accepts = accepts.clone();
+    let handle = audio::start_with_output(config(base), move || {
+        Ok(ControlledFixture {
+            output: FixtureOutput(output_events.clone()),
+            accepts: output_accepts.clone(),
+            recovering: std::sync::Arc::new(AtomicBool::new(false)),
+        })
+    })
+    .unwrap();
+    let mut status = handle.status.clone();
+    wait_fixture_state(&mut status, "connected").await;
+    commands.send(Ws::text(PCM_START)).unwrap();
+    wait_fixture_event(&events, "begin:", 1).await;
+    commands.send(fixture_frame()).unwrap();
+    wait_fixture_event(&events, "dropped", 1).await;
+    assert_eq!(status.borrow().state, "buffering");
+
+    accepts.store(true, Ordering::Release);
+    commands.send(fixture_frame()).unwrap();
+    wait_fixture_state(&mut status, "ready").await;
+    accepts.store(false, Ordering::Release);
+    commands.send(fixture_frame()).unwrap();
+    wait_fixture_event(&events, "dropped", 2).await;
+    wait_fixture_state(&mut status, "buffering").await;
+
+    handle.shutdown().await;
+    drop(commands);
+    fixture.await.unwrap();
+}
+
+#[tokio::test]
+async fn pending_recovery_is_visible_and_only_delivered_stream_returns_to_ready() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio_tungstenite::tungstenite::Message as Ws;
+    let (base, commands, fixture) = stream_fixture().await;
+    let events = FixtureEvents::default();
+    let recovering = std::sync::Arc::new(AtomicBool::new(false));
+    let output_events = events.clone();
+    let output_recovering = recovering.clone();
+    let handle = audio::start_with_output(config(base), move || {
+        Ok(ControlledFixture {
+            output: FixtureOutput(output_events.clone()),
+            accepts: std::sync::Arc::new(AtomicBool::new(true)),
+            recovering: output_recovering.clone(),
+        })
+    })
+    .unwrap();
+    let mut status = handle.status.clone();
+    wait_fixture_state(&mut status, "connected").await;
+    commands.send(Ws::text(PCM_START)).unwrap();
+    wait_fixture_event(&events, "begin:", 1).await;
+    assert_eq!(status.borrow().state, "buffering");
+
+    recovering.store(true, Ordering::Release);
+    wait_fixture_state(&mut status, "recovering").await;
+    recovering.store(false, Ordering::Release);
+    wait_fixture_state(&mut status, "buffering").await;
+
+    recovering.store(true, Ordering::Release);
+    wait_fixture_state(&mut status, "recovering").await;
+    commands.send(fixture_frame()).unwrap();
+    wait_fixture_event(&events, "samples:", 1).await;
+    assert_eq!(status.borrow().state, "recovering");
+    recovering.store(false, Ordering::Release);
+    wait_fixture_state(&mut status, "ready").await;
+    recovering.store(true, Ordering::Release);
+    wait_fixture_state(&mut status, "recovering").await;
+    recovering.store(false, Ordering::Release);
+    wait_fixture_state(&mut status, "ready").await;
+
+    handle.shutdown().await;
+    drop(commands);
+    fixture.await.unwrap();
+}
+
+#[derive(Default)]
+struct WriteGate {
+    started: std::sync::atomic::AtomicBool,
+    release: std::sync::atomic::AtomicBool,
+}
+
+struct GatedFixture {
+    output: FixtureOutput,
+    gate: std::sync::Arc<WriteGate>,
+    writes: usize,
+}
+
+impl audio::Output for GatedFixture {
+    fn formats(&self) -> anyhow::Result<Vec<sendspin::protocol::messages::AudioFormatSpec>> {
+        self.output.formats()
+    }
+    fn begin(
+        &mut self,
+        format: sendspin::audio::AudioFormat,
+        clock: audio::SharedClock,
+        gain: audio::Gain,
+    ) -> anyhow::Result<()> {
+        self.output.begin(format, clock, gain)
+    }
+    fn write(&mut self, buffer: sendspin::audio::AudioBuffer) -> bool {
+        let accepted = self.output.write(buffer);
+        self.writes += 1;
+        if self.writes == 2 {
+            self.gate
+                .started
+                .store(true, std::sync::atomic::Ordering::Release);
+            while !self.gate.release.load(std::sync::atomic::Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        accepted
+    }
+    fn clear(&mut self) {
+        self.output.clear();
+    }
+    fn gain(&mut self, gain: audio::Gain) {
+        self.output.gain(gain);
+    }
+    fn failed(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn stale_epoch_cannot_restore_ready_after_a_write_finishes() {
+    use std::sync::atomic::Ordering;
+    use tokio_tungstenite::tungstenite::Message as Ws;
+    let (base, commands, fixture) = stream_fixture().await;
+    let events = FixtureEvents::default();
+    let gate = std::sync::Arc::new(WriteGate::default());
+    let output_events = events.clone();
+    let output_gate = gate.clone();
+    let handle = audio::start_with_output(config(base), move || {
+        Ok(GatedFixture {
+            output: FixtureOutput(output_events.clone()),
+            gate: output_gate.clone(),
+            writes: 0,
+        })
+    })
+    .unwrap();
+    let mut status = handle.status.clone();
+    wait_fixture_state(&mut status, "connected").await;
+    commands.send(Ws::text(PCM_START)).unwrap();
+    wait_fixture_event(&events, "begin:", 1).await;
+    commands.send(fixture_frame()).unwrap();
+    wait_fixture_state(&mut status, "ready").await;
+    commands.send(fixture_frame()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !gate.started.load(Ordering::Acquire) {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let clears = events
+        .lock()
+        .iter()
+        .filter(|event| *event == "clear")
+        .count();
+    commands
+        .send(Ws::text(
+            r#"{"type":"stream/end","payload":{"roles":["player"]}}"#,
+        ))
+        .unwrap();
+    wait_fixture_state(&mut status, "connected").await;
+    gate.release.store(true, Ordering::Release);
+    wait_fixture_event(&events, "clear", clears + 1).await;
+    assert_eq!(status.borrow().state, "connected");
+
+    handle.shutdown().await;
+    drop(commands);
+    fixture.await.unwrap();
 }

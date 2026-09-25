@@ -1,7 +1,7 @@
 # Releases
 
-Releases require explicit user authorization. This tree targets `v1.0.0`;
-the previous release is `v0.9.3`.
+Releases require explicit user authorization. This tree targets `v1.1.0`;
+the previous release is `v1.0.0`.
 `v0.9.0` was the first as ma-tui. `v0.1.0-beta.2` was
 published as local-matui before the rename, and `v0.1.0-beta.1` under that same
 former name and withdrawn the same day; its tag and assets were deleted rather

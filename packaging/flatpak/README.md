@@ -1,17 +1,18 @@
 # Flatpak bundle
 
-Download `ma-tui-v1.0.0-linux-x86_64.flatpak` and `SHA256SUMS` from
+Download `ma-tui-v1.1.0-linux-x86_64.flatpak` and `SHA256SUMS` from
 the GitHub release, then run:
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
-flatpak install --user ./ma-tui-v1.0.0-linux-x86_64.flatpak
+flatpak install --user ./ma-tui-v1.1.0-linux-x86_64.flatpak
 flatpak run io.github.brdweb.MaTui
 ```
 
 The installer obtains Freedesktop Platform 26.08 from Flathub if needed. This is
 an x86-64 single-file bundle, not a Flathub listing or an update repository.
-Install a later downloaded bundle with the same command to update. To remove:
+Replace an installed bundle with:
+`flatpak install --user --reinstall ./ma-tui-*.flatpak`. To remove:
 `flatpak uninstall --user io.github.brdweb.MaTui` (keeps settings by default).
 The desktop entry uses your terminal emulator; the command above also works
 inside an already-open terminal.
@@ -55,7 +56,7 @@ headers and `desktop-file-validate`. No flatpak-builder or compiler SDK is neede
 cargo build --release --locked
 python3 packaging/arch/stage.py
 python3 packaging/flatpak/build.py
-flatpak install --user --noninteractive .tools/flatpak-package/ma-tui-v1.0.0-linux-x86_64.flatpak
+flatpak install --user --noninteractive .tools/flatpak-package/ma-tui-v1.1.0-linux-x86_64.flatpak
 flatpak run io.github.brdweb.MaTui --version
 flatpak run io.github.brdweb.MaTui --demo --snapshot
 flatpak run io.github.brdweb.MaTui --list-devices

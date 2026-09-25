@@ -178,7 +178,7 @@ use sendspin::protocol::messages::{
 };
 use sendspin::ProtocolClientBuilder;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     mpsc as thread_channel, Arc,
 };
 use tokio::sync::{mpsc, oneshot, watch};
@@ -258,10 +258,14 @@ pub trait SampleSink: Send + Sync + 'static {
 pub(crate) trait Output: 'static {
     fn formats(&self) -> Result<Vec<AudioFormatSpec>>;
     fn begin(&mut self, format: AudioFormat, clock: SharedClock, gain: Gain) -> Result<()>;
-    fn write(&mut self, buffer: AudioBuffer);
+    /// True only when this buffer was accepted by the local output queue.
+    fn write(&mut self, buffer: AudioBuffer) -> bool;
     fn clear(&mut self);
     fn gain(&mut self, gain: Gain);
     fn failed(&self) -> bool;
+    fn recovering(&self) -> bool {
+        false
+    }
     // Only driver failures may rebuild the output. Decode/buffer failures
     // remain fatal rather than being hidden by a reconnect loop.
     fn recoverable_failure(&self) -> bool {
@@ -288,10 +292,58 @@ enum Feedback {
     Gain(Gain),
     Failed,
 }
+
+// Music Assistant may replay its advertised 2 MiB send-ahead immediately after
+// a stream start. Keep the worker handoff large enough for that burst, while
+// separately reserving encoded bytes so slot count cannot become unbounded RAM.
+const MAX_WORK_ITEMS: usize = 1024;
+const MAX_ENCODED_WORK_BYTES: usize = 2 * 1024 * 1024;
 fn status(tx: &watch::Sender<AudioStatus>, state: &str, detail: &str) {
     tx.send_replace(AudioStatus {
         state: state.into(),
         detail: detail.into(),
+    });
+}
+
+// A worker failure remains authoritative even if a protocol event arrives
+// before the supervisor has finished shutting down that session.
+fn session_status(tx: &watch::Sender<AudioStatus>, state: &str, detail: &str) {
+    tx.send_if_modified(|current| {
+        if current.state == "failed" || (current.state == state && current.detail == detail) {
+            return false;
+        }
+        *current = AudioStatus {
+            state: state.into(),
+            detail: detail.into(),
+        };
+        true
+    });
+}
+
+// Worker updates must not resurrect an old stream after its epoch was
+// invalidated, or overwrite a reconnect/terminal failure from the supervisor.
+fn stream_status(
+    tx: &watch::Sender<AudioStatus>,
+    epoch: &AtomicU64,
+    generation: u64,
+    state: &str,
+    detail: &str,
+) {
+    tx.send_if_modified(|current| {
+        if epoch.load(Ordering::Acquire) != generation
+            || !matches!(
+                current.state.as_str(),
+                "connected" | "buffering" | "ready" | "recovering"
+            )
+            || (current.state == state && current.detail == detail)
+        {
+            return false;
+        }
+        *current = AudioStatus {
+            state: state.into(),
+            detail: detail.into(),
+        };
+        true
     });
 }
 
@@ -343,6 +395,7 @@ fn worker_stopped(tx: &watch::Sender<AudioStatus>) {
 // must release its output before the next one opens the configured device.
 struct OutputWorker {
     work: thread_channel::SyncSender<(u64, Work)>,
+    queued_audio: Arc<AtomicUsize>,
     feedback: mpsc::Receiver<(u64, Feedback)>,
     ready: oneshot::Receiver<std::result::Result<Vec<AudioFormatSpec>, &'static str>>,
     done: oneshot::Receiver<(bool, Option<String>)>,
@@ -360,7 +413,9 @@ where
     O: Output,
     F: FnMut() -> Result<O> + Send + 'static,
 {
-    let (work_tx, work_rx) = thread_channel::sync_channel(64);
+    let (work_tx, work_rx) = thread_channel::sync_channel(MAX_WORK_ITEMS);
+    let queued_audio = Arc::new(AtomicUsize::new(0));
+    let queued_audio_worker = queued_audio.clone();
     let (feedback_tx, feedback_rx) = mpsc::channel(32);
     let (ready_tx, ready_rx) = oneshot::channel();
     let (done_tx, done_rx) = oneshot::channel();
@@ -391,6 +446,7 @@ where
                 let mut decoder: Option<StreamDecoder> = None;
                 let mut setup: Option<(StreamPlayerConfig, SharedClock)> = None;
                 let mut active = false;
+                let mut accepted_audio = false;
                 let mut failed = None;
                 let mut last_diagnostics = std::time::Instant::now();
                 while !worker_stop.load(Ordering::Acquire) {
@@ -399,11 +455,44 @@ where
                         failed = Some(detail);
                         break;
                     }
-                    if last_diagnostics.elapsed() >= Duration::from_secs(1) {
+                    if active {
+                        if output.recovering() {
+                            stream_status(
+                                &worker_status,
+                                &worker_epoch,
+                                current_epoch,
+                                "recovering",
+                                "Audio output recovering",
+                            );
+                        } else {
+                            let was_recovering = worker_status.borrow().state == "recovering";
+                            if was_recovering {
+                                stream_status(
+                                    &worker_status,
+                                    &worker_epoch,
+                                    current_epoch,
+                                    if accepted_audio { "ready" } else { "buffering" },
+                                    if accepted_audio {
+                                        "Audio buffer accepted by local output"
+                                    } else {
+                                        "Awaiting audio from stream"
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    if active
+                        && current_epoch == worker_epoch.load(Ordering::Acquire)
+                        && last_diagnostics.elapsed() >= Duration::from_secs(1)
+                    {
                         last_diagnostics = std::time::Instant::now();
                         if let Some(detail) = output.diagnostics() {
                             worker_status.send_if_modified(|current| {
-                                if current.state != "ready" || current.detail == detail {
+                                if !matches!(
+                                    current.state.as_str(),
+                                    "buffering" | "ready" | "recovering"
+                                ) || current.detail == detail
+                                {
                                     return false;
                                 }
                                 current.detail = detail;
@@ -417,6 +506,7 @@ where
                         decoder = None;
                         setup = None;
                         active = false;
+                        accepted_audio = false;
                         current_epoch = new_epoch;
                     }
                     let (generation, event) = match work_rx.recv_timeout(Duration::from_millis(10))
@@ -425,6 +515,9 @@ where
                         Err(thread_channel::RecvTimeoutError::Timeout) => continue,
                         Err(_) => break,
                     };
+                    if let Work::Audio(chunk) = &event {
+                        queued_audio_worker.fetch_sub(chunk.data.len(), Ordering::AcqRel);
+                    }
                     if generation != worker_epoch.load(Ordering::Acquire) {
                         continue;
                     }
@@ -434,6 +527,7 @@ where
                         decoder = None;
                         setup = None;
                         active = false;
+                        accepted_audio = false;
                         current_epoch = generation;
                     }
                     let result: Result<()> = (|| {
@@ -443,6 +537,7 @@ where
                                 decoder = None;
                                 setup = None;
                                 active = false;
+                                accepted_audio = false;
                                 let next = StreamDecoder::new(&config, &formats)?;
                                 gain = next_gain;
                                 if start_now {
@@ -451,7 +546,13 @@ where
                                 decoder = Some(next);
                                 setup = Some((config, clock));
                                 active = start_now;
-                                status(&worker_status, "ready", "Audio stream configured");
+                                stream_status(
+                                    &worker_status,
+                                    &worker_epoch,
+                                    generation,
+                                    "buffering",
+                                    "Awaiting audio from stream",
+                                );
                             }
                             Work::Audio(chunk) => {
                                 if let Some(ref mut dec) = decoder {
@@ -470,11 +571,39 @@ where
                                     if generation == worker_epoch.load(Ordering::Acquire)
                                         && !worker_stop.load(Ordering::Acquire)
                                     {
-                                        output.write(AudioBuffer {
+                                        let nonempty = !samples.is_empty();
+                                        let accepted = output.write(AudioBuffer {
                                             timestamp: chunk.timestamp,
                                             samples,
                                             format: dec.format.clone(),
                                         });
+                                        if !accepted {
+                                            accepted_audio = false;
+                                        } else if nonempty {
+                                            accepted_audio = true;
+                                        }
+                                        if !accepted || nonempty {
+                                            let recovering = output.recovering();
+                                            stream_status(
+                                                &worker_status,
+                                                &worker_epoch,
+                                                generation,
+                                                if recovering {
+                                                    "recovering"
+                                                } else if accepted_audio {
+                                                    "ready"
+                                                } else {
+                                                    "buffering"
+                                                },
+                                                if recovering {
+                                                    "Audio output recovering"
+                                                } else if accepted_audio {
+                                                    "Audio buffer accepted by local output"
+                                                } else {
+                                                    "Awaiting audio from stream"
+                                                },
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -483,6 +612,7 @@ where
                                 decoder = None;
                                 setup = None;
                                 active = false;
+                                accepted_audio = false;
                             }
                             Work::Gain(next) => {
                                 gain = next;
@@ -517,6 +647,7 @@ where
         .map_err(|_| anyhow::anyhow!("Unable to start audio worker"))?;
     Ok(OutputWorker {
         work: work_tx,
+        queued_audio,
         feedback: feedback_rx,
         ready: ready_rx,
         done: done_rx,
@@ -561,6 +692,7 @@ where
             }
             let OutputWorker {
                 work: work_tx,
+                queued_audio,
                 feedback: mut feedback_rx,
                 ready: ready_rx,
                 done: mut done_rx,
@@ -607,7 +739,12 @@ where
                             break;
                         },
                         r = session(&config, &url, &formats, &mut gain,
-                            SessionIo {work: &work_tx, epoch: &epoch, feedback: &mut feedback_rx},
+                            SessionIo {
+                                work: &work_tx,
+                                queued_audio: &queued_audio,
+                                epoch: &epoch,
+                                feedback: &mut feedback_rx,
+                            },
                             &status_tx) => r,
                     };
                     epoch.fetch_add(1, Ordering::AcqRel);
@@ -622,6 +759,14 @@ where
                         .err()
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Audio connection closed".into());
+                    if matches!(
+                        detail.as_str(),
+                        "Audio worker queue full or unavailable"
+                            | "Audio worker encoded queue full"
+                    ) {
+                        status(&status_tx, "failed", "Audio worker queue overflow");
+                        break;
+                    }
                     status(&status_tx, "reconnecting", &detail);
                     if started.elapsed() > Duration::from_secs(30) {
                         retry = Duration::from_millis(250);
@@ -711,10 +856,10 @@ where
 
 struct SessionIo<'a> {
     work: &'a thread_channel::SyncSender<(u64, Work)>,
+    queued_audio: &'a AtomicUsize,
     epoch: &'a Arc<AtomicU64>,
     feedback: &'a mut mpsc::Receiver<(u64, Feedback)>,
 }
-
 async fn session(
     config: &AudioConfig,
     url: &url::Url,
@@ -725,6 +870,7 @@ async fn session(
 ) -> Result<()> {
     let SessionIo {
         work,
+        queued_audio,
         epoch,
         feedback,
     } = io;
@@ -756,12 +902,12 @@ async fn session(
     connection.visualizer.close();
     while connection.artwork.try_recv().is_ok() {}
     while connection.visualizer.try_recv().is_ok() {}
-    status(state, "ready", "Authenticated audio player connected");
+    session_status(state, "connected", "Authenticated audio player connected");
     let mut stream_config: Option<StreamPlayerConfig> = None;
     loop {
         // Sendspin 0.3.7 exposes unbounded internal receivers. Drain promptly,
         // cap observed backlog and never await the bounded audio worker queue.
-        if connection.audio.len() > 64 || connection.messages.len() > 64 {
+        if connection.audio.len() > MAX_WORK_ITEMS || connection.messages.len() > 64 {
             bail!("Audio receive queue overflow");
         }
         let generation = epoch.load(Ordering::Acquire);
@@ -769,42 +915,62 @@ async fn session(
             work.try_send((epoch.load(Ordering::Acquire), event))
                 .map_err(|_| anyhow::anyhow!("Audio worker queue full or unavailable"))
         };
+        let send_audio = |chunk: sendspin::protocol::client::AudioChunk| {
+            let bytes = chunk.data.len();
+            queued_audio
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+                    queued
+                        .checked_add(bytes)
+                        .filter(|next| *next <= MAX_ENCODED_WORK_BYTES)
+                })
+                .map_err(|_| anyhow::anyhow!("Audio worker encoded queue full"))?;
+            if work
+                .try_send((epoch.load(Ordering::Acquire), Work::Audio(chunk)))
+                .is_err()
+            {
+                queued_audio.fetch_sub(bytes, Ordering::AcqRel);
+                bail!("Audio worker queue full or unavailable");
+            }
+            Ok(())
+        };
         tokio::select! {
-            biased;
-            event=feedback.recv()=>match event {
-                Some((g,Feedback::Gain(next))) if g==generation => {
-                    connection.sender.send_message(Message::ClientState(ClientState {state:None,player:Some(next.state())})).await.map_err(|_|anyhow::anyhow!("Audio state confirmation failed"))?;
-                }
-                Some((_,Feedback::Failed))|None=>bail!("Audio output failed"),
-                _=>{}
-            },
-            message=connection.messages.recv()=>match message {
-                None=>bail!("Audio proxy disconnected"),
-                Some(Message::StreamStart(start))=>if let Some(player)=start.player {
-                    // Split protocol receivers do not carry ordering metadata.
-                    // Discard queued chunks at a stream boundary rather than
-                    // accidentally decode old-format bytes under the new format.
-                    while connection.audio.try_recv().is_ok() {}
-                    epoch.fetch_add(1,Ordering::AcqRel);
-                    stream_config=Some(player.clone());
-                    send(Work::Begin(player,connection.clock_sync.clone(),*gain,true))?;
-                },
-                Some(Message::StreamClear(clear))=>if clear.roles.as_ref().is_none_or(|roles|roles.iter().any(|r|r=="player")) {while connection.audio.try_recv().is_ok(){} epoch.fetch_add(1,Ordering::AcqRel);
-                    if let Some(config)=&stream_config {send(Work::Begin(config.clone(),connection.clock_sync.clone(),*gain,false))?;} else {send(Work::End)?;}},
-                Some(Message::StreamEnd(end))=>if end.roles.as_ref().is_none_or(|roles|roles.iter().any(|r|r=="player")) {while connection.audio.try_recv().is_ok(){} epoch.fetch_add(1,Ordering::AcqRel); stream_config=None; send(Work::End)?;},
-                Some(Message::ServerCommand(command))=>if let Some(command)=command.player {
-                    let mut next=*gain;
-                    match command.command {
-                        PlayerCommandType::Volume=>if let Some(volume)=command.volume {if volume>100 {bail!("Invalid audio volume command");}next.volume=volume;},
-                        PlayerCommandType::Mute=>if let Some(muted)=command.mute {next.muted=muted;},
-                        PlayerCommandType::SetStaticDelay=>if let Some(delay)=command.static_delay_ms {if delay>5000 {bail!("Invalid audio delay command");}next.delay=delay;},
-                        _=>continue,
+                biased;
+                event=feedback.recv()=>match event {
+                    Some((g,Feedback::Gain(next))) if g==generation => {
+                        connection.sender.send_message(Message::ClientState(ClientState {state:None,player:Some(next.state())})).await.map_err(|_|anyhow::anyhow!("Audio state confirmation failed"))?;
                     }
-                    *gain=next; send(Work::Gain(next))?;
+                    Some((_,Feedback::Failed))|None=>bail!("Audio output failed"),
+                    _=>{}
                 },
-                _=>{}
-            },
-            chunk=connection.audio.recv()=>match chunk {Some(c)=>send(Work::Audio(c))?,None=>bail!("Audio proxy disconnected")},
+                message=connection.messages.recv()=>match message {
+                    None=>bail!("Audio proxy disconnected"),
+                    Some(Message::StreamStart(start))=>if let Some(player)=start.player {
+                        // Split protocol receivers do not carry ordering metadata.
+                        // Discard queued chunks at a stream boundary rather than
+                        // accidentally decode old-format bytes under the new format.
+                        while connection.audio.try_recv().is_ok() {}
+                        epoch.fetch_add(1,Ordering::AcqRel);
+                        session_status(state,"buffering","Awaiting audio from stream");
+                        stream_config=Some(player.clone());
+                        send(Work::Begin(player,connection.clock_sync.clone(),*gain,true))?;
+                    },
+                    Some(Message::StreamClear(clear))=>if clear.roles.as_ref().is_none_or(|roles|roles.iter().any(|r|r=="player")) {while connection.audio.try_recv().is_ok(){} epoch.fetch_add(1,Ordering::AcqRel);
+                        session_status(state,if stream_config.is_some() {"buffering"} else {"connected"},if stream_config.is_some() {"Awaiting audio from stream"} else {"Authenticated audio player connected"});
+                        if let Some(config)=&stream_config {send(Work::Begin(config.clone(),connection.clock_sync.clone(),*gain,false))?;} else {send(Work::End)?;}},
+                    Some(Message::StreamEnd(end))=>if end.roles.as_ref().is_none_or(|roles|roles.iter().any(|r|r=="player")) {while connection.audio.try_recv().is_ok(){} epoch.fetch_add(1,Ordering::AcqRel); stream_config=None; session_status(state,"connected","Authenticated audio player connected"); send(Work::End)?;},
+                    Some(Message::ServerCommand(command))=>if let Some(command)=command.player {
+                        let mut next=*gain;
+                        match command.command {
+                            PlayerCommandType::Volume=>if let Some(volume)=command.volume {if volume>100 {bail!("Invalid audio volume command");}next.volume=volume;},
+                            PlayerCommandType::Mute=>if let Some(muted)=command.mute {next.muted=muted;},
+                            PlayerCommandType::SetStaticDelay=>if let Some(delay)=command.static_delay_ms {if delay>5000 {bail!("Invalid audio delay command");}next.delay=delay;},
+                            _=>continue,
+                        }
+                        *gain=next; send(Work::Gain(next))?;
+                    },
+                    _=>{}
+                },
+                chunk=connection.audio.recv()=>match chunk {Some(c)=>send_audio(c)?,None=>bail!("Audio proxy disconnected")},
         }
     }
 }
@@ -1093,9 +1259,9 @@ impl Output for DeviceOutput {
         }
         Ok(())
     }
-    fn write(&mut self, buffer: AudioBuffer) {
+    fn write(&mut self, buffer: AudioBuffer) -> bool {
         let (Some(player), Some(clock)) = (&self.player, &self.clock) else {
-            return;
+            return false;
         };
         let sync = clock.lock();
         // No free-running output: wait for the library's monotonic clock sync.
@@ -1104,10 +1270,10 @@ impl Output for DeviceOutput {
             drop(sync);
             player.clear();
             self.queued = QueueBudget::default();
-            return;
+            return false;
         }
         let Some(when) = sync.server_to_local_instant(buffer.timestamp) else {
-            return;
+            return false;
         };
         drop(sync);
         let now = std::time::Instant::now();
@@ -1122,11 +1288,11 @@ impl Output for DeviceOutput {
         ) {
             self.failed = Some(self.queued.error.unwrap_or("Invalid audio timestamp"));
             player.clear();
-            return;
+            return false;
         }
         // Late chunks cannot contribute to audible output and need not queue.
         if when + duration < now {
-            return;
+            return false;
         }
         // Sendspin emits each sample `static_delay_ms` early so downstream
         // latency lands it on time, and the budget above measures the same
@@ -1144,6 +1310,7 @@ impl Output for DeviceOutput {
             );
         }
         player.enqueue(buffer);
+        true
     }
     fn clear(&mut self) {
         if let Some(player) = self.player.take() {
@@ -1181,6 +1348,11 @@ impl Output for DeviceOutput {
     }
     fn failed(&self) -> bool {
         self.failed.is_some() || self.driver_failure.is_some()
+    }
+    fn recovering(&self) -> bool {
+        self.health
+            .as_ref()
+            .is_some_and(HealthMonitor::is_recovering)
     }
     fn recoverable_failure(&self) -> bool {
         self.failed.is_none() && self.driver_failure.is_some()

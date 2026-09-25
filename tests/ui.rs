@@ -172,6 +172,374 @@ fn search_typing_never_triggers_transport_or_quit() {
     assert_eq!(app.key(key(KeyCode::Char('q'))), ui::Action::Quit);
 }
 
+fn search_key(code: crossterm::event::KeyCode) -> crossterm::event::KeyEvent {
+    crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+}
+
+fn search_result(title: &str, kind: &str, uri: &str) -> ui::TrackView {
+    let media = ma_tui::music::Media::parse(
+        &serde_json::json!({
+            "name": title,
+            "item_id": title,
+            "provider": "library",
+            "media_type": kind,
+            "uri": uri,
+        }),
+        "",
+    );
+    ui::TrackView {
+        media: Some(media),
+        uri: format!("display://{title}"),
+        title: title.into(),
+        ..Default::default()
+    }
+}
+
+fn ready_search() -> ui::App {
+    ui::App {
+        connected: true,
+        focus: ui::Focus::Search,
+        content: ui::Focus::Search,
+        selected_id: Some("speaker".into()),
+        players: vec![ui::PlayerView {
+            id: "speaker".into(),
+            available: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+fn assert_search_queue_menu(
+    app: &mut ui::App,
+    key: crossterm::event::KeyCode,
+    replace: ui::Action,
+    add: ui::Action,
+) {
+    assert_eq!(app.key(search_key(key)), ui::Action::None);
+    let menu = app.menu.as_ref().expect("queue choices open");
+    assert_eq!(menu.player, app.selected_id);
+    assert_eq!(menu.entries.len(), 2);
+    assert!(menu.entries.iter().all(|entry| entry.action.needs_player()));
+    assert_eq!(menu.entries[0].label, "Replace queue");
+    assert_eq!(menu.entries[0].action, replace);
+    assert_eq!(menu.entries[1].label, "Add to queue");
+    assert_eq!(menu.entries[1].action, add);
+    assert_eq!(
+        app.key(search_key(crossterm::event::KeyCode::Enter)),
+        replace
+    );
+    assert!(app.menu.is_none());
+    assert_eq!(app.key(search_key(key)), ui::Action::None);
+    app.key(search_key(crossterm::event::KeyCode::Down));
+    assert_eq!(app.key(search_key(crossterm::event::KeyCode::Enter)), add);
+    assert!(app.menu.is_none());
+}
+
+#[test]
+fn search_selection_uses_media_uris_and_offers_queue_choices_in_display_order() {
+    use crossterm::event::KeyCode;
+    let mut app = ready_search();
+    app.results = vec![
+        search_result("First", "track", "provider://track/first"),
+        search_result("Second", "track", "provider://track/second"),
+        search_result("First again", "track", "provider://track/first"),
+        search_result("Third", "track", "provider://track/third"),
+    ];
+    app.search_cursor = 1;
+    assert_eq!(app.key(search_key(KeyCode::Char('x'))), ui::Action::None);
+    app.key(search_key(KeyCode::Home));
+    assert_eq!(app.key(search_key(KeyCode::Char('x'))), ui::Action::None);
+    app.key(search_key(KeyCode::End));
+    assert_eq!(app.key(search_key(KeyCode::Char('x'))), ui::Action::None);
+    assert_eq!(
+        app.search_selection,
+        [
+            "provider://track/first",
+            "provider://track/second",
+            "provider://track/third"
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    );
+    let uris = vec![
+        "provider://track/first".into(),
+        "provider://track/second".into(),
+        "provider://track/third".into(),
+    ];
+    assert_search_queue_menu(
+        &mut app,
+        KeyCode::Char('A'),
+        ui::Action::PlayMany(uris.clone()),
+        ui::Action::EnqueueMany(uris),
+    );
+    app.key(search_key(KeyCode::Home));
+    app.key(search_key(KeyCode::Down));
+    assert_eq!(app.key(search_key(KeyCode::Char('x'))), ui::Action::None);
+    let uris = vec![
+        "provider://track/first".into(),
+        "provider://track/third".into(),
+    ];
+    assert_search_queue_menu(
+        &mut app,
+        KeyCode::Char('A'),
+        ui::Action::PlayMany(uris.clone()),
+        ui::Action::EnqueueMany(uris),
+    );
+}
+
+#[test]
+fn search_only_selects_available_playable_tracks_and_requires_a_speaker_to_append() {
+    use crossterm::event::KeyCode;
+    let folder = ma_tui::music::Media::folder(
+        "Folder",
+        ma_tui::music::Target::Providers {
+            path: Some("provider/folder".into()),
+        },
+    );
+    let mut unavailable = search_result("Unavailable", "track", "provider://track/unavailable");
+    unavailable.media.as_mut().unwrap().available = false;
+    let mut unplayable = search_result("Unplayable", "track", "provider://track/unplayable");
+    unplayable.media.as_mut().unwrap().playable = false;
+    let mut app = ready_search();
+    app.results = vec![
+        search_result("Album", "album", "provider://album/one"),
+        search_result("Playlist", "playlist", "provider://playlist/one"),
+        ui::TrackView {
+            media: Some(folder),
+            title: "Folder".into(),
+            ..Default::default()
+        },
+        unavailable,
+        unplayable,
+        search_result("No media URI", "track", ""),
+        ui::TrackView {
+            uri: "display://untyped".into(),
+            title: "No media".into(),
+            ..Default::default()
+        },
+        search_result("Playable", "track", "provider://track/playable"),
+    ];
+    for cursor in 0..7 {
+        app.search_cursor = cursor;
+        assert_eq!(app.key(search_key(KeyCode::Char('x'))), ui::Action::None);
+        assert!(
+            app.search_selection.is_empty(),
+            "row {cursor} is not selectable"
+        );
+    }
+    assert_eq!(app.key(search_key(KeyCode::Char('A'))), ui::Action::None);
+    assert!(app.status.contains("Select tracks with x"));
+    app.search_cursor = 7;
+    app.selected_id = None;
+    app.key(search_key(KeyCode::Char('x')));
+    assert_eq!(app.search_selection.len(), 1, "selection needs no speaker");
+    assert_eq!(app.key(search_key(KeyCode::Char('A'))), ui::Action::None);
+    assert!(app.menu.is_none());
+    assert!(app.status.contains("Select an available speaker"));
+    app.selected_id = Some("speaker".into());
+    app.connected = false;
+    assert_eq!(app.key(search_key(KeyCode::Char('A'))), ui::Action::None);
+    assert!(app.menu.is_none());
+    app.connected = true;
+    let uris = vec!["provider://track/playable".into()];
+    assert_search_queue_menu(
+        &mut app,
+        KeyCode::Char('A'),
+        ui::Action::PlayMany(uris.clone()),
+        ui::Action::EnqueueMany(uris),
+    );
+}
+
+#[test]
+fn a_submitted_search_clears_selection_but_cancelling_keeps_it() {
+    use crossterm::event::KeyCode;
+    let mut app = ready_search();
+    app.results = vec![search_result("Old", "track", "provider://track/old")];
+    app.key(search_key(KeyCode::Char('x')));
+    assert_eq!(app.search_selection.len(), 1);
+    app.key(search_key(KeyCode::Char('/')));
+    app.key(search_key(KeyCode::Esc));
+    assert_eq!(app.search_selection.len(), 1);
+    app.key(search_key(KeyCode::Esc));
+    assert!(app.focus == ui::Focus::Music);
+    app.key(search_key(KeyCode::Tab));
+    app.key(search_key(KeyCode::Tab));
+    assert!(app.focus == ui::Focus::Search);
+    assert_eq!(
+        app.search_selection.len(),
+        1,
+        "pane switches keep the marks"
+    );
+    app.key(search_key(KeyCode::Char('/')));
+    for c in "new search".chars() {
+        app.key(search_key(KeyCode::Char(c)));
+    }
+    assert_eq!(
+        app.key(search_key(KeyCode::Enter)),
+        ui::Action::Search("new search".into())
+    );
+    assert!(app.search_selection.is_empty());
+    assert_eq!(app.key(search_key(KeyCode::Char('A'))), ui::Action::None);
+}
+
+#[test]
+fn search_folder_and_collection_queue_choices_preserve_target_and_uri() {
+    use crossterm::event::KeyCode;
+    let target = ma_tui::music::Target::Providers {
+        path: Some("provider/folder".into()),
+    };
+    let mut app = ready_search();
+    app.results = vec![
+        ui::TrackView {
+            media: Some(ma_tui::music::Media::folder("Folder", target.clone())),
+            title: "Folder".into(),
+            ..Default::default()
+        },
+        search_result("Album", "album", "provider://album/one"),
+        search_result("Playlist", "playlist", "provider://playlist/one"),
+    ];
+    assert_search_queue_menu(
+        &mut app,
+        KeyCode::Char('a'),
+        ui::Action::PlayFolder(target.clone()),
+        ui::Action::EnqueueFolder(target),
+    );
+    assert!(
+        app.focus == ui::Focus::Search,
+        "folder choices do not navigate"
+    );
+    app.key(search_key(KeyCode::Down));
+    assert_search_queue_menu(
+        &mut app,
+        KeyCode::Char('a'),
+        ui::Action::Play("provider://album/one".into()),
+        ui::Action::Enqueue("provider://album/one".into()),
+    );
+    app.key(search_key(KeyCode::Down));
+    assert_search_queue_menu(
+        &mut app,
+        KeyCode::Char('a'),
+        ui::Action::Play("provider://playlist/one".into()),
+        ui::Action::Enqueue("provider://playlist/one".into()),
+    );
+    app.selected_id = None;
+    app.search_cursor = 0;
+    assert_eq!(app.key(search_key(KeyCode::Char('a'))), ui::Action::None);
+    assert!(app.status.contains("Select an available speaker"));
+    assert!(app.menu.is_none());
+}
+
+#[test]
+fn search_single_track_a_appends_immediately_and_needs_a_speaker() {
+    use crossterm::event::KeyCode;
+    let mut app = ready_search();
+    app.results = vec![search_result("Song", "track", "provider://track/song")];
+    assert_eq!(
+        app.key(search_key(KeyCode::Char('a'))),
+        ui::Action::Enqueue("provider://track/song".into())
+    );
+    assert!(app.menu.is_none());
+
+    app.selected_id = None;
+    assert_eq!(app.key(search_key(KeyCode::Char('a'))), ui::Action::None);
+    assert!(app.menu.is_none());
+}
+
+#[test]
+fn search_collection_menu_rechecks_the_selected_speaker() {
+    use crossterm::event::KeyCode;
+    let mut app = ready_search();
+    app.results = vec![search_result("Album", "album", "provider://album/one")];
+    assert_eq!(app.key(search_key(KeyCode::Char('a'))), ui::Action::None);
+    assert_eq!(
+        app.menu.as_ref().unwrap().player.as_deref(),
+        Some("speaker")
+    );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 30)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Enter choose option"));
+    assert!(
+        !text.contains("Space/p pause/resume"),
+        "transport keys are inactive inside a menu"
+    );
+    app.players[0].available = false;
+    assert_eq!(app.key(search_key(KeyCode::Enter)), ui::Action::None);
+    assert!(app.menu.is_none());
+    assert!(app.status.contains("Player disconnected"));
+}
+
+#[test]
+fn selected_search_rows_and_shortcuts_are_visible_after_moving_the_cursor() {
+    use crossterm::event::KeyCode;
+    let mut app = ready_search();
+    app.results = vec![
+        search_result("Marked track", "track", "provider://track/marked"),
+        search_result("Other track", "track", "provider://track/other"),
+    ];
+    app.key(search_key(KeyCode::Char('x')));
+    app.key(search_key(KeyCode::Down));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 30)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let rows = terminal
+        .backend()
+        .buffer()
+        .content
+        .chunks(110)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+        .collect::<Vec<_>>();
+    assert!(
+        rows.iter()
+            .find(|row| row.contains("Marked track"))
+            .unwrap()
+            .contains('✓'),
+        "the selected track has an on-screen marker even off cursor"
+    );
+    assert!(
+        !rows
+            .iter()
+            .find(|row| row.contains("Other track"))
+            .unwrap()
+            .contains('✓'),
+        "the cursor is not the selection marker"
+    );
+    for label in [
+        "Enter open/play menu",
+        "P playback menu",
+        "x select track",
+        "A selected replace/add menu",
+        "a add item or choose queue",
+        "Space/p pause/resume",
+        "</> previous/next",
+        "? controls",
+    ] {
+        assert!(
+            rows.iter().any(|row| row.contains(label)),
+            "{label} must be visible in full"
+        );
+    }
+    app.focus = ui::Focus::Music;
+    app.content = ui::Focus::Music;
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let text = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(text.contains("A selected replace/add menu"));
+    assert!(text.contains("a add item or choose queue"));
+}
+
 #[test]
 fn renders_disconnected_and_small_terminal_without_panicking() {
     for (width, height) in [(110, 32), (50, 16), (30, 8), (1, 1)] {
@@ -246,8 +614,18 @@ fn music_filter_and_library_title_show_navigation_state() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(text.contains("[ ] page · o sort · ^F filter"));
-    assert!(text.contains("f fav"));
+    for label in [
+        "Enter open/play menu",
+        "P playback menu",
+        "r reload",
+        "[/] previous/next page",
+        "o sort",
+        "Ctrl-F filter",
+        "</> previous/next",
+        "? controls",
+    ] {
+        assert!(text.contains(label), "{label} must be visible in full");
+    }
 }
 
 #[test]
@@ -338,6 +716,48 @@ fn shuffle_and_repeat_keys_act_on_the_displayed_queue() {
     app.queue_details = json!({"is_dynamic": true});
     assert_eq!(app.key(key(KeyCode::Char('z'))), ui::Action::None);
     assert!(app.status.contains("dynamic queue"));
+}
+
+#[test]
+fn queue_clear_requires_the_focused_active_queue_and_available_speaker() {
+    use crossterm::event::KeyCode;
+    use ma_tui::controls::Command;
+    use serde_json::json;
+
+    let mut app = ready_search();
+    app.focus = ui::Focus::Queue;
+    assert_eq!(app.key(search_key(KeyCode::Char('c'))), ui::Action::None);
+    assert!(app.status.contains("No active queue"));
+    app.queue_id = "  ".into();
+    assert_eq!(app.key(search_key(KeyCode::Char('c'))), ui::Action::None);
+
+    app.queue_id = "speaker-queue".into();
+    let clear = ui::Action::Command(Command::Queue {
+        id: "speaker-queue".into(),
+        name: "clear",
+        args: json!({}),
+    });
+    assert_eq!(app.key(search_key(KeyCode::Char('c'))), clear);
+    app.focus = ui::Focus::Music;
+    assert_eq!(app.key(search_key(KeyCode::Char('c'))), ui::Action::None);
+    app.focus = ui::Focus::Queue;
+    app.selected_id = None;
+    assert_eq!(app.key(search_key(KeyCode::Char('c'))), ui::Action::None);
+    app.selected_id = Some("speaker".into());
+    app.connected = false;
+    assert_eq!(app.key(search_key(KeyCode::Char('c'))), ui::Action::None);
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(50, 16)).unwrap();
+    terminal.draw(|frame| ui::draw(frame, &mut app)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("c clear queue"));
+    assert!(text.contains("? controls"));
 }
 
 /// The queue stays on screen while browsing, and the header carries state.

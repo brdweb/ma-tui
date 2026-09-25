@@ -13,6 +13,7 @@ use ratatui::{
     Frame,
 };
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 pub const PAGE_SIZE: usize = 100;
 
@@ -281,6 +282,11 @@ impl Media {
         }
     }
 
+    /// A multi-selection names only playable tracks, never collections or folders.
+    fn selectable_track(&self) -> bool {
+        self.kind == "track" && self.available && self.playable && !self.uri.is_empty()
+    }
+
     /// The identity Music Assistant needs to name this item back to itself.
     /// These are `ItemMapping`'s only required fields.
     pub fn item(&self) -> Option<Value> {
@@ -379,6 +385,8 @@ pub struct Page {
     pub title: String,
     pub items: Vec<Media>,
     pub cursor: usize,
+    /// URI-keyed selection follows this page into history, not the cursor.
+    pub selected: HashSet<String>,
     pub next: Option<Target>,
 }
 impl Default for Page {
@@ -470,6 +478,7 @@ impl Default for Page {
             items,
             cursor: 0,
             next: None,
+            selected: HashSet::new(),
         }
     }
 }
@@ -528,6 +537,7 @@ impl Browser {
             title,
             items: vec![],
             cursor: 0,
+            selected: HashSet::new(),
             next: None,
         };
         self.reload()
@@ -540,6 +550,7 @@ impl Browser {
             title,
             items: vec![],
             cursor: 0,
+            selected: HashSet::new(),
             next: None,
         };
         self.reload()
@@ -575,6 +586,11 @@ impl Browser {
         self.loading = false;
         match result {
             Ok((items, next)) => {
+                self.page.selected.retain(|uri| {
+                    items
+                        .iter()
+                        .any(|item| item.selectable_track() && item.uri == *uri)
+                });
                 self.page.items = items;
                 self.page.next = next;
                 self.page.cursor = self
@@ -884,6 +900,49 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
     Action::None
 }
 
+fn queue_player_available(app: &App) -> bool {
+    app.connected
+        && app
+            .players
+            .iter()
+            .any(|p| p.available && Some(&p.id) == app.selected_id.as_ref())
+}
+
+/// Queue choices capture the speaker at menu creation; controls::key checks
+/// that same speaker again when the choice is submitted.
+pub(crate) fn queue_choices(app: &mut App, title: &str, replace: Action, add: Action) -> Action {
+    let Some(player) = app
+        .players
+        .iter()
+        .find(|p| Some(&p.id) == app.selected_id.as_ref() && p.available && app.connected)
+    else {
+        app.status = "Select an available speaker first".into();
+        return Action::None;
+    };
+    app.menu = Some(crate::controls::Menu {
+        player: Some(player.id.clone()),
+        title: format!("{title} · on {}", player.name),
+        entries: vec![
+            crate::controls::Entry {
+                section: "Queue",
+                label: "Replace queue".into(),
+                action: replace,
+            },
+            crate::controls::Entry {
+                section: "Queue",
+                label: "Add to queue".into(),
+                action: add,
+            },
+        ],
+        cursor: 0,
+        prompt: None,
+        error: String::new(),
+        filter: String::new(),
+        filtering: false,
+    });
+    Action::None
+}
+
 pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
     use crossterm::event::KeyModifiers;
 
@@ -1027,6 +1086,51 @@ pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
             };
             Some(app.music.replace(target))
         }
+        KeyCode::Char('x') if key.modifiers.is_empty() => {
+            if !app.music.loading {
+                if let Some(media) = app.music.page.items.get(app.music.page.cursor) {
+                    if media.selectable_track() {
+                        let selected = &mut app.music.page.selected;
+                        if !selected.remove(&media.uri) {
+                            selected.insert(media.uri.clone());
+                        }
+                    } else {
+                        app.status = "Only available tracks can be selected".into();
+                    }
+                }
+            }
+            Some(Action::None)
+        }
+        KeyCode::Char('A') => {
+            if app.music.page.selected.is_empty() {
+                app.status = "No tracks selected".into();
+                return Some(Action::None);
+            }
+            if app.music.loading {
+                return Some(Action::None);
+            }
+            let mut uris = Vec::with_capacity(app.music.page.selected.len());
+            for media in &app.music.page.items {
+                if media.selectable_track()
+                    && app.music.page.selected.contains(&media.uri)
+                    && !uris.contains(&media.uri)
+                {
+                    uris.push(media.uri.clone());
+                }
+            }
+            if uris.is_empty() {
+                app.status = "No tracks selected".into();
+                Some(Action::None)
+            } else {
+                let title = format!("{} selected tracks", uris.len());
+                Some(queue_choices(
+                    app,
+                    &title,
+                    Action::PlayMany(uris.clone()),
+                    Action::EnqueueMany(uris),
+                ))
+            }
+        }
         KeyCode::Enter | KeyCode::Char('P') | KeyCode::Char('a') | KeyCode::Char('N') => {
             if app.music.loading {
                 return Some(Action::None);
@@ -1042,14 +1146,31 @@ pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
             if matches!(key.code, KeyCode::Enter | KeyCode::Char('P')) {
                 return Some(choose(app, &media));
             }
-            if !app.connected
-                || !app
-                    .players
-                    .iter()
-                    .any(|p| p.available && Some(&p.id) == app.selected_id.as_ref())
-            {
+            if !queue_player_available(app) {
                 app.status = "Select an available speaker first".into();
                 return Some(Action::None);
+            }
+            if key.code == KeyCode::Char('a') {
+                if media.kind == "folder" {
+                    if let Some(target) = media.open {
+                        return Some(queue_choices(
+                            app,
+                            &media.title,
+                            Action::PlayFolder(target.clone()),
+                            Action::EnqueueFolder(target),
+                        ));
+                    }
+                } else if matches!(media.kind.as_str(), "album" | "playlist")
+                    && media.available
+                    && media.playable
+                {
+                    return Some(queue_choices(
+                        app,
+                        &media.title,
+                        Action::Play(media.uri.clone()),
+                        Action::Enqueue(media.uri),
+                    ));
+                }
             }
             Some(if media.available && media.playable {
                 if key.code == KeyCode::Char('a') {
@@ -1098,11 +1219,16 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         }
         _ => String::new(),
     };
+    let selected = if browser.page.selected.is_empty() {
+        String::new()
+    } else {
+        format!(" · {} selected", browser.page.selected.len())
+    };
     let area = crate::ui::heading(
         frame,
         area,
         palette,
-        &format!("MUSIC · {}{}", browser.page.title, library),
+        &format!("MUSIC · {}{}{}", browser.page.title, selected, library),
         app.focus == Focus::Music,
     );
     if browser.filtering {
@@ -1127,9 +1253,19 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let items = browser.page.items.iter().map(|m| {
+        let marker = if m.selectable_track() {
+            if browser.page.selected.contains(&m.uri) {
+                "[x]"
+            } else {
+                "[ ]"
+            }
+        } else {
+            "   "
+        };
         ListItem::new(vec![
             Line::from(format!(
-                "{} {}{}{}",
+                "{} {} {}{}{}",
+                marker,
                 if m.open.is_some() { "›" } else { "♪" },
                 m.title,
                 if m.favorite { " ♥" } else { "" },

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">MA-TUI</title>
+  <desc id="desc">Music Assistant terminal player icon</desc>
+  <rect width="512" height="512" rx="96" fill="#121212"/>
+  <rect x="28" y="28" width="456" height="456" rx="72" fill="none" stroke="#e68e0d" stroke-width="24"/>
+  <path d="M112 160h64l80 104 80-104h64v192h-56v-104l-64 84h-48l-64-84v104h-56z" fill="#bebebe"/>
+  <path d="M216 376l104-60-104-60z" fill="#e68e0d"/>
+</svg>

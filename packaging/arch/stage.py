@@ -75,6 +75,7 @@ def stage():
                          (ROOT / 'docs/audio-troubleshooting.md', 'audio-troubleshooting.md'),
                          (ROOT / 'LICENSE', 'LICENSE'),
                          (ROOT / 'packaging/ma-tui.desktop', 'ma-tui.desktop'),
+                         (ROOT / 'packaging/ma-tui.svg', 'ma-tui.svg'),
                          (ROOT / 'packaging/arch/DEVELOPMENT-STATUS', 'DEVELOPMENT-STATUS')]:
         shutil.copyfile(source, STAGE / name)
     install = (ROOT / 'packaging/arch/INSTALL.txt').read_text()
@@ -83,7 +84,7 @@ def stage():
     (STAGE / 'VERSION').write_text(version + '\n')
     (STAGE / 'BUILD-INPUT.json').write_text(json.dumps(build_input.metadata, indent=2) + '\n')
     (STAGE / 'ma-tui').chmod(0o755)
-    sources = ['ma-tui', 'ma-tui.desktop', 'README.md', 'audio-troubleshooting.md', 'INSTALL.txt', 'THIRD-PARTY-NOTICES.tar.gz', 'DEVELOPMENT-STATUS', 'LICENSE']
+    sources = ['ma-tui', 'ma-tui.desktop', 'ma-tui.svg', 'README.md', 'audio-troubleshooting.md', 'INSTALL.txt', 'THIRD-PARTY-NOTICES.tar.gz', 'DEVELOPMENT-STATUS', 'LICENSE']
     sums = ' '.join("'" + hashlib.sha256((STAGE / name).read_bytes()).hexdigest() + "'" for name in sources)
     template = (ROOT / 'packaging/arch/PKGBUILD.in').read_text()
     (STAGE / 'PKGBUILD').write_text(template.replace('@GLIBC@', glibc).replace('@PKGVER@', pkgver).replace('@SHA256SUMS@', sums))

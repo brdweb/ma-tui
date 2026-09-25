@@ -48,6 +48,35 @@ async fn server_with(
     (url, task)
 }
 
+async fn request(socket: &mut tokio::net::TcpStream) -> Value {
+    let mut bytes = Vec::new();
+    let end = loop {
+        let mut b = [0; 1024];
+        let n = socket.read(&mut b).await.unwrap();
+        assert!(n > 0);
+        bytes.extend_from_slice(&b[..n]);
+        if let Some(i) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+            break i + 4;
+        }
+    };
+    let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
+    assert!(headers.starts_with("post /prefix/api http/1.1"));
+    assert!(headers.contains("authorization: bearer test-secret\r\n"));
+    let len: usize = headers
+        .lines()
+        .find_map(|l| l.strip_prefix("content-length: "))
+        .unwrap()
+        .parse()
+        .unwrap();
+    while bytes.len() < end + len {
+        let mut b = [0; 1024];
+        let n = socket.read(&mut b).await.unwrap();
+        assert!(n > 0);
+        bytes.extend_from_slice(&b[..n]);
+    }
+    serde_json::from_slice(&bytes[end..end + len]).unwrap()
+}
+
 async fn server(replies: Vec<(u16, String)>) -> (String, tokio::task::JoinHandle<Vec<Value>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/prefix", listener.local_addr().unwrap());
@@ -55,39 +84,36 @@ async fn server(replies: Vec<(u16, String)>) -> (String, tokio::task::JoinHandle
         let mut requests = Vec::new();
         for (status, body) in replies {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut bytes = Vec::new();
-            let end;
-            loop {
-                let mut b = [0; 1024];
-                let n = socket.read(&mut b).await.unwrap();
-                assert!(n > 0);
-                bytes.extend_from_slice(&b[..n]);
-                if let Some(i) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
-                    end = i + 4;
-                    break;
-                }
-            }
-            let headers = String::from_utf8_lossy(&bytes[..end]).to_lowercase();
-            assert!(headers.starts_with("post /prefix/api http/1.1"));
-            assert!(headers.contains("authorization: bearer test-secret\r\n"));
-            let len: usize = headers
-                .lines()
-                .find_map(|l| l.strip_prefix("content-length: "))
-                .unwrap()
-                .parse()
-                .unwrap();
-            while bytes.len() < end + len {
-                let mut b = [0; 1024];
-                let n = socket.read(&mut b).await.unwrap();
-                assert!(n > 0);
-                bytes.extend_from_slice(&b[..n]);
-            }
-            requests.push(serde_json::from_slice(&bytes[end..end + len]).unwrap());
+            requests.push(request(&mut socket).await);
             socket.write_all(format!("HTTP/1.1 {status} Test\r\nLocation: /prefix/api\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
         }
         requests
     });
     (url, task)
+}
+
+/// Keep listening after a scripted failure to detect any later media command.
+async fn observing_server(
+    replies: Vec<(u16, String)>,
+) -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<Value>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/prefix", listener.local_addr().unwrap());
+    let (observed, received) = tokio::sync::mpsc::unbounded_channel();
+    let task = tokio::spawn(async move {
+        let mut replies = replies.into_iter();
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let received_request = request(&mut socket).await;
+            observed.send(received_request).unwrap();
+            let (status, body) = replies.next().unwrap_or_else(|| ok(Value::Null));
+            socket.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        }
+    });
+    (url, received, task)
 }
 
 #[tokio::test]
@@ -389,12 +415,157 @@ async fn play_explicitly_replaces_while_enqueue_adds() {
                 .unwrap();
         }
         let r = task.await.unwrap();
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0]["command"], "player_queues/get_active_queue");
+        assert_eq!(r[0]["args"], json!({"player_id":"member"}));
         assert_eq!(r[1]["command"], "player_queues/play_media");
         assert_eq!(
             r[1]["args"],
             json!({"queue_id":"leader","media":"library://track/1","option":option})
         );
     }
+}
+
+#[tokio::test]
+async fn play_uris_replaces_then_appends_in_order_on_the_selected_players_queue() {
+    let (url, task) = server(vec![
+        ok(json!({"queue_id":"group-leader"})),
+        ok(Value::Null),
+        ok(Value::Null),
+        ok(Value::Null),
+    ])
+    .await;
+    let uris = vec![
+        "provider://track/third".into(),
+        "library://track/first".into(),
+        "provider://track/second".into(),
+    ];
+    ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .play_uris("selected-member", &uris)
+        .await
+        .unwrap();
+    let calls = task.await.unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0]["command"], "player_queues/get_active_queue");
+    assert_eq!(calls[0]["args"], json!({"player_id":"selected-member"}));
+    for (index, (call, uri)) in calls[1..].iter().zip(&uris).enumerate() {
+        assert_eq!(call["command"], "player_queues/play_media");
+        assert_eq!(
+            call["args"],
+            json!({"queue_id":"group-leader","media":uri,"option":if index == 0 { "replace" } else { "add" }})
+        );
+    }
+}
+
+#[tokio::test]
+async fn play_uris_stops_after_the_first_failed_replace_or_add() {
+    let uris = vec![
+        "provider://track/1".into(),
+        "provider://track/2".into(),
+        "provider://track/3".into(),
+    ];
+    for failed_at in [0, 1] {
+        let mut replies = vec![ok(json!({"queue_id":"leader"}))];
+        replies.extend(std::iter::repeat_with(|| ok(Value::Null)).take(failed_at));
+        replies.push((500, "{}".into()));
+        let (url, mut received, task) = observing_server(replies).await;
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            ApiClient::new(&url, "test-secret")
+                .unwrap()
+                .play_uris("selected-member", &uris),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(error.to_string(), "Music Assistant HTTP 500");
+        let calls: Vec<_> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+        assert_eq!(
+            calls.len(),
+            failed_at + 2,
+            "no URI follows a failed command"
+        );
+        assert_eq!(calls[0]["command"], "player_queues/get_active_queue");
+        assert_eq!(calls[0]["args"], json!({"player_id":"selected-member"}));
+        for (index, call) in calls[1..].iter().enumerate() {
+            assert_eq!(call["command"], "player_queues/play_media");
+            assert_eq!(
+                call["args"],
+                json!({"queue_id":"leader","media":uris[index],"option":if index == 0 { "replace" } else { "add" }})
+            );
+        }
+        task.abort();
+    }
+}
+
+#[tokio::test]
+async fn enqueue_uris_looks_up_the_active_queue_once_then_appends_each_uri_in_order() {
+    let (url, task) = server(vec![
+        ok(json!({"queue_id":"group-leader"})),
+        ok(Value::Null),
+        ok(Value::Null),
+        ok(Value::Null),
+    ])
+    .await;
+    let uris = vec![
+        "provider://track/third".into(),
+        "library://track/first".into(),
+        "provider://track/second".into(),
+    ];
+    ApiClient::new(&url, "test-secret")
+        .unwrap()
+        .enqueue_uris("selected-member", &uris)
+        .await
+        .unwrap();
+    let calls = task.await.unwrap();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0]["command"], "player_queues/get_active_queue");
+    assert_eq!(calls[0]["args"], json!({"player_id":"selected-member"}));
+    for (call, uri) in calls[1..].iter().zip(&uris) {
+        assert_eq!(call["command"], "player_queues/play_media");
+        assert_eq!(
+            call["args"],
+            json!({"queue_id":"group-leader","media":uri,"option":"add"})
+        );
+    }
+}
+
+#[tokio::test]
+async fn enqueue_uris_stops_on_the_first_failed_append() {
+    let (url, mut received, task) = observing_server(vec![
+        ok(json!({"queue_id":"leader"})),
+        ok(Value::Null),
+        (500, "{}".into()),
+    ])
+    .await;
+    let uris = vec![
+        "provider://track/1".into(),
+        "provider://track/2".into(),
+        "provider://track/3".into(),
+    ];
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        ApiClient::new(&url, "test-secret")
+            .unwrap()
+            .enqueue_uris("member", &uris),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(error.to_string(), "Music Assistant HTTP 500");
+    let calls: Vec<_> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    assert_eq!(calls.len(), 3, "the third item must not be sent");
+    assert_eq!(calls[0]["command"], "player_queues/get_active_queue");
+    assert_eq!(
+        calls[1]["args"],
+        json!({"queue_id":"leader","media":"provider://track/1","option":"add"})
+    );
+    assert_eq!(
+        calls[2]["args"],
+        json!({"queue_id":"leader","media":"provider://track/2","option":"add"})
+    );
+    task.abort();
 }
 
 #[tokio::test]

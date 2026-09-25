@@ -97,7 +97,7 @@ async fn check_output(device: Option<&str>, output_buffer_frames: Option<u32>) {
                 let maximum: usize = maximum.parse().unwrap();
                 if maximum > 0 {
                     assert!(minimum > 0 && maximum >= minimum, "{}", status.detail);
-                    assert_eq!(status.state, "ready", "{}", status.detail);
+                    assert_eq!(status.state, "buffering", "{}", status.detail);
                     println!(
                         "Silent output telemetry ({}): {}",
                         device.unwrap_or("default"),

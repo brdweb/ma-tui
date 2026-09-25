@@ -3,7 +3,7 @@ use ma_tui::{
     controller::Update,
     controls::{InputKind, PromptTarget},
     music::{Kind, Media, Order, Target},
-    presentation::apply,
+    presentation::{apply, local_audio_line, local_audio_status_line},
     ui::{Action, App, PlayerView, TrackView},
 };
 
@@ -350,4 +350,243 @@ fn playlist_updates_open_picker_or_report_the_failure() {
     );
     assert!(failed.menu.is_none());
     assert_eq!(failed.status, "Could not load playlists: permission denied");
+}
+
+#[test]
+fn local_audio_line_shows_current_file_format_when_ma_supplies_it() {
+    let flac = serde_json::json!({
+        "current_item": {"media_item": {
+            "provider": "library",
+            "item_id": "library-track",
+            "provider_mappings": [{
+                "provider_instance": "filesystem--music",
+                "item_id": "file-track",
+                "audio_format": {
+                    "content_type": "audio/x-flac",
+                    "sample_rate": 96000,
+                    "bit_depth": 24,
+                    "channels": 2
+                }
+            }]
+        }}
+    });
+    assert_eq!(
+        local_audio_line("ready", &flac),
+        "Local audio · ready · FLAC 96 kHz 24-bit stereo"
+    );
+
+    let mp3 = serde_json::json!({
+        "current_item": {"streamdetails": {"audio_format": {
+            "content_type": "audio/mpeg",
+            "bit_rate": 320000,
+            "sample_rate": 44100
+        }}}
+    });
+    assert_eq!(
+        local_audio_line("playing", &mp3),
+        "Local audio · playing · MP3 320 kbps 44.1 kHz"
+    );
+
+    let legacy = serde_json::json!({
+        "current_item": {"media_item": {"metadata": {"audio_format": {
+            "content_type": "m4a",
+            "codec_type": "aac",
+            "bit_rate": 256000
+        }}}}
+    });
+    assert_eq!(
+        local_audio_line("ready", &legacy),
+        "Local audio · ready · AAC 256 kbps",
+        "legacy metadata remains a fallback, and codec overrides container"
+    );
+}
+
+#[test]
+fn local_audio_line_prefers_stream_then_matching_provider_mapping() {
+    let queue = serde_json::json!({
+        "current_item": {
+            "streamdetails": {"audio_format": {
+                "content_type": "audio/mpeg", "bit_rate": 320000
+            }},
+            "media_item": {
+                "provider": "filesystem--music",
+                "item_id": "file-track",
+                "provider_mappings": [
+                    {
+                        "provider_instance": "other--music",
+                        "item_id": "other-track",
+                        "audio_format": {"content_type": "flac", "bit_depth": 16}
+                    },
+                    {
+                        "provider_instance": "filesystem--music",
+                        "item_id": "file-track",
+                        "audio_format": {"content_type": "flac", "bit_depth": 24}
+                    }
+                ],
+                "metadata": {"audio_format": {"content_type": "aac"}}
+            }
+        }
+    });
+    assert_eq!(
+        local_audio_line("playing", &queue),
+        "Local audio · playing · MP3 320 kbps"
+    );
+    let mut without_stream = queue;
+    without_stream["current_item"]
+        .as_object_mut()
+        .unwrap()
+        .remove("streamdetails");
+    assert_eq!(
+        local_audio_line("playing", &without_stream),
+        "Local audio · playing · FLAC 24-bit",
+        "matching mapping wins over an unrelated mapping and legacy metadata"
+    );
+}
+
+#[test]
+fn local_audio_line_omits_missing_or_malformed_file_metadata() {
+    assert_eq!(
+        local_audio_line("recovering", &serde_json::Value::Null),
+        "Local audio · recovering"
+    );
+    let stream_without_format = serde_json::json!({
+        "current_item": {
+            "streamdetails": {"audio_format": null},
+            "media_item": {"provider_mappings": [{
+                "audio_format": {"content_type": "flac", "bit_depth": 24}
+            }]}
+        }
+    });
+    assert_eq!(
+        local_audio_line("failed", &stream_without_format),
+        "Local audio · failed",
+        "an available streamdetails object must not be replaced by a mapping's quality"
+    );
+    let malformed_mapping = serde_json::json!({
+        "current_item": {"media_item": {"provider_mappings": [
+            null,
+            {"audio_format": null},
+            {"audio_format": {"content_type": ["flac"], "bit_rate": -1}}
+        ]}}
+    });
+    assert_eq!(
+        local_audio_line("failed", &malformed_mapping),
+        "Local audio · failed"
+    );
+    let malformed = serde_json::json!({
+        "current_item": {"media_item": {"metadata": {"audio_format": {
+            "content_type": ["flac"],
+            "bit_rate": -1,
+            "sample_rate": "96000",
+            "bit_depth": -24,
+            "channels": 20
+        }}}}
+    });
+    assert_eq!(local_audio_line("ready", &malformed), "Local audio · ready");
+
+    let partial = serde_json::json!({
+        "current_item": {"media_item": {"metadata": {"audio_format": {
+            "content_type": "flac",
+            "bit_rate": "320000",
+            "sample_rate": 12345,
+            "bit_depth": 0,
+            "channels": 20
+        }}}}
+    });
+    assert_eq!(
+        local_audio_line("failed", &partial),
+        "Local audio · failed · FLAC"
+    );
+}
+
+#[test]
+fn local_audio_status_line_allows_only_fixed_reconnect_reasons() {
+    assert_eq!(
+        local_audio_status_line(
+            "reconnecting",
+            "Audio proxy disconnected",
+            &serde_json::Value::Null,
+        ),
+        "Local audio · reconnecting · connection lost"
+    );
+    assert_eq!(
+        local_audio_status_line(
+            "failed",
+            "Audio worker queue overflow",
+            &serde_json::Value::Null,
+        ),
+        "Local audio · failed · worker queue overflow"
+    );
+    assert_eq!(
+        local_audio_status_line(
+            "reconnecting",
+            "untrusted peer detail \u{1b}[2J",
+            &serde_json::Value::Null,
+        ),
+        "Local audio · reconnecting"
+    );
+    let queue = serde_json::json!({
+        "current_item": {"streamdetails": {"audio_format": {
+            "content_type": "audio/mpeg", "bit_rate": 320000
+        }}}
+    });
+    assert_eq!(
+        local_audio_status_line("reconnecting", "Audio proxy connection failed", &queue),
+        "Local audio · reconnecting · connection failed · MP3 320 kbps"
+    );
+}
+
+#[test]
+fn local_audio_line_rejects_controls_and_is_bounded() {
+    let unsafe_format = serde_json::json!({
+        "current_item": {"media_item": {"metadata": {"audio_format": {
+            "content_type": "flac\u{1b}]52;payload\u{7}",
+            "bit_rate": 320000
+        }}}}
+    });
+    let line = local_audio_line("failed", &unsafe_format);
+    assert_eq!(line, "Local audio · failed");
+    assert!(!line.chars().any(char::is_control));
+    assert_eq!(
+        local_audio_line("failed\u{1b}[2J", &serde_json::Value::Null),
+        "Local audio · unknown"
+    );
+
+    let tainted_codec = serde_json::json!({
+        "current_item": {"media_item": {"metadata": {"audio_format": {
+            "content_type": "flac",
+            "codec_type": "flac\u{1b}[2J"
+        }}}}
+    });
+    assert_eq!(
+        local_audio_line("ready", &tainted_codec),
+        "Local audio · ready · FLAC"
+    );
+
+    let long_format = serde_json::json!({
+        "current_item": {"media_item": {"metadata": {"audio_format": {
+            "content_type": "flac".repeat(100),
+            "bit_rate": 320000
+        }}}}
+    });
+    assert_eq!(
+        local_audio_line("ready", &long_format),
+        "Local audio · ready"
+    );
+
+    let largest_format = serde_json::json!({
+        "current_item": {"media_item": {"metadata": {"audio_format": {
+            "content_type": "abcdefghijkl",
+            "bit_rate": 10000000,
+            "sample_rate": 384000,
+            "bit_depth": 64,
+            "channels": 2
+        }}}}
+    });
+    let line = local_audio_line("reconnecting", &largest_format);
+    assert_eq!(
+        line,
+        "Local audio · reconnecting · ABCDEFGHIJKL 10000 kbps 384 kHz 64-bit stereo"
+    );
+    assert!(line.chars().count() <= 80);
 }

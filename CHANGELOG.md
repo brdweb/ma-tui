@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.1.0 — 2026-09-25
+
+### Queue and playback
+
+- Clear the active queue directly from Queue with `c`, stopping playback.
+- Select individual playable tracks with `x` in Music or Search, then use `A`
+  to choose **Replace queue** or **Add to queue** in displayed order. `a` still
+  immediately adds a highlighted track; for an album, playlist or provider
+  folder it now offers those same two choices. Albums and playlists go to Music
+  Assistant by their own URI; folders use only their immediately listed
+  available, playable children. Multi-track operations stop on the first
+  failure without rolling back earlier changes.
+
+### Local audio and desktop packaging
+
+- Fix false `Local audio · ready` status: a connection or stream announcement
+  alone is not ready; ready requires decoded audio accepted by the local output
+  path. Connected/buffering can still await audio, while recovering reports
+  transient output recovery.
+- Accept Music Assistant's cached post-`stream/start` audio burst while local
+  output opens. The worker handoff is bounded by 1024 items and 2 MiB encoded
+  audio; a real bound violation now fails visibly instead of reconnecting
+  indefinitely.
+- Show concise `Local audio · <state>` and short safe connection/output reasons,
+  optionally followed by the current queue item's file codec, bitrate or compact
+  resolution. Raw server, device and timing diagnostics remain hidden.
+- Add an MA-TUI application icon to native, Arch and Flatpak packages. The
+  Flatpak clears inherited `NO_COLOR` so the Omarchy palette remains visible.
+
+### Interface
+
+- Spell out bottom key hints for playback menus, queue edits, paging, sort,
+  filter, transport and controls instead of ambiguous abbreviations.
+
 ## 1.0.0 — 2026-09-23
 
 First 1.0 release. The stated scope is complete and stable; the README's Known

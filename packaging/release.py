@@ -78,7 +78,7 @@ def main():
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
     archive_path = destination / f'{prefix}-linux-x86_64.tar.gz'
     with tarfile.open(archive_path, 'w:gz') as archive:
-        for name in ['ma-tui', 'ma-tui.desktop', 'README.md', 'INSTALL.txt', 'DEVELOPMENT-STATUS', 'LICENSE', 'third-party']:
+        for name in ['ma-tui', 'ma-tui.desktop', 'ma-tui.svg', 'README.md', 'INSTALL.txt', 'DEVELOPMENT-STATUS', 'LICENSE', 'third-party']:
             archive.add(STAGE / name, arcname=f'{prefix}/{name}')
         archive.add(STAGE / 'audio-troubleshooting.md', arcname=f'{prefix}/docs/audio-troubleshooting.md')
         archive.add(manifest_path, arcname=f'{prefix}/BUILDINFO.json')

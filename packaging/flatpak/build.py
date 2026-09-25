@@ -29,6 +29,7 @@ SOURCE_URL = 'https://download.gnome.org/sources/libsecret/0.21/libsecret-0.21.7
 SOURCE_SHA256 = '6b452e4750590a2b5617adc40026f28d2f4903de15f1250e1d1c40bfd68ed55e'
 FINISH_ARGS = [
     '--command=ma-tui', '--share=network', '--socket=pulseaudio',
+    '--unset-env=NO_COLOR',
     '--talk-name=org.freedesktop.secrets',
     '--own-name=org.mpris.MediaPlayer2.ma_tui',
     '--talk-name=org.freedesktop.Notifications',
@@ -103,6 +104,9 @@ def main():
     applications.mkdir(parents=True)
     shutil.copy2(ROOT / 'packaging/flatpak' / f'{APP}.desktop', applications)
     run('desktop-file-validate', str(applications / f'{APP}.desktop'))
+    icons = files / 'share/icons/hicolor/scalable/apps'
+    icons.mkdir(parents=True)
+    shutil.copy2(ROOT / 'packaging/ma-tui.svg', icons / 'ma-tui.svg')
     docs = files / 'share/doc/ma-tui'
     docs.mkdir(parents=True)
     shutil.copy2(ROOT / 'packaging/flatpak/README.md', docs / 'README.md')
