@@ -917,13 +917,24 @@ async fn session(
         };
         let send_audio = |chunk: sendspin::protocol::client::AudioChunk| {
             let bytes = chunk.data.len();
-            queued_audio
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
-                    queued
-                        .checked_add(bytes)
-                        .filter(|next| *next <= MAX_ENCODED_WORK_BYTES)
-                })
-                .map_err(|_| anyhow::anyhow!("Audio worker encoded queue full"))?;
+            // Keep the bounded reservation compatible with older Rust toolchains;
+            // fetch_update was deprecated in Rust 1.99.
+            let mut queued = queued_audio.load(Ordering::Acquire);
+            loop {
+                let next = queued
+                    .checked_add(bytes)
+                    .filter(|next| *next <= MAX_ENCODED_WORK_BYTES)
+                    .ok_or_else(|| anyhow::anyhow!("Audio worker encoded queue full"))?;
+                match queued_audio.compare_exchange_weak(
+                    queued,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(current) => queued = current,
+                }
+            }
             if work
                 .try_send((epoch.load(Ordering::Acquire), Work::Audio(chunk)))
                 .is_err()

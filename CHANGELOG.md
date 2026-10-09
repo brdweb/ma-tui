@@ -16,6 +16,8 @@
 - Add disposable-container Flatpak build/verification with private keyring and
   null audio output. Sandbox, terminal/controller and silent audio checks pass;
   physical desktop playback and media-key qualification remain unperformed.
+- Keep bounded audio-byte reservations compatible with Rust 1.99's atomic API
+  deprecation without raising the compiler requirement or changing queue limits.
 
 Music Assistant 2.10.3 changed the server's autoplay default to off. Queues
 following that default may stop at the end; MA-TUI's autoplay control remains
