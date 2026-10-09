@@ -1,7 +1,7 @@
 # Releases
 
-Releases require explicit user authorization. This tree prepares `v1.1.1` for
-Music Assistant 2.10.5; the previous release is `v1.1.0`.
+Releases require explicit user authorization. The latest stable release is
+`v1.1.1`, targeting Music Assistant 2.10.5; the previous release is `v1.1.0`.
 `v0.9.0` was the first as ma-tui. `v0.1.0-beta.2` was
 published as local-matui before the rename, and `v0.1.0-beta.1` under that same
 former name and withdrawn the same day; its tag and assets were deleted rather
@@ -51,6 +51,36 @@ does not have: `0.9.0` is used as is. The package is unsigned and no AUR or
 distribution-repository publication is implied. No service is deployed. The
 Flatpak application branch is `stable`; it was `beta` while the releases were,
 and a ref is not upgraded across branches.
+
+## 1.1.1 publication (2026-10-09)
+
+- Published [v1.1.1](https://github.com/brdweb/ma-tui/releases/tag/v1.1.1)
+  as stable/latest at 14:51:13 UTC, with six assets: native archive, source
+  archive, Arch package, Flatpak bundle, `BUILDINFO.json` and `SHA256SUMS`.
+- The annotated tag resolves to `ef4c9237fa056603c1f8e796e60ba36a07230f2f`,
+  source tree `ecca5c35a574aa8cc1e080108c5589f62bf0a24b`.
+  [Main CI run 37945356369](https://github.com/brdweb/ma-tui/actions/runs/37945356369)
+  passed quality checks, packaging tests, optimized build and RustSec audit.
+  Every final wrapper used that run's release-build artifact through
+  `MA_TUI_CI_BUILD`, not the earlier dirty candidate.
+- Final native executable SHA256:
+  `e2aa6932fea5b4577e4446907a646920be699f5b7267df106b5833a20c38fb0c`.
+  Native PTY/settings/controller fixtures and Arch install, integrity,
+  startup, PTY/controller and uninstall checks passed.
+- Final Flatpak bundle SHA256:
+  `2895de42a66feb8feec42928a46bc2882910f8ffdc6c790a5e0d220305cf6fda`.
+  The corrected disposable-container workflow again reached `FLATPAK VERIFIED`.
+  Final `BUILDINFO.json` and `VERIFIED.json` are retained in
+  `.tools/flatpak-package/`; the full output is
+  `.tools/release-1.1.1/final-flatpak-verification.log`.
+- Downloaded all hosted assets after publication. Every checksum passed;
+  native/Arch executable, source lockfile and Flatpak identities matched the
+  final CI provenance. The downloaded native executable passed version and
+  demo-snapshot checks inside Ubuntu 24.04. Remote tag, stable/latest flags
+  and the six hosted asset names were verified.
+- Audio verification used a disposable null sink. Audible desktop playback,
+  media keys, notifications and real desktop integration remain unqualified.
+  The published assets are unsigned and are not reproducible-build attestations.
 
 ## 1.1.1 preparation (2026-10-09)
 
@@ -107,11 +137,12 @@ authorized on 2026-10-09, with the desktop coverage limits below retained.
   null sink. No Omarchy theme was present, so its conditional identity check
   did not run. Audible playback, media keys, notifications and real desktop
   integration were not qualified.
-- The verified bundle is
+- The initial candidate bundle was
   `.tools/flatpak-package/ma-tui-v1.1.1-linux-x86_64.flatpak`, SHA256
   `3b602b408d2017b0cf9c2f2a75f7598ef1821157448a3afe52794f634d35bde0`.
-  Matching `BUILDINFO.json` and `VERIFIED.json` are retained beside it; the
-  successful container output is
+  Its local staging records have since been replaced by the final CI-derived
+  bundle and matching records described above. The original successful
+  candidate-container output remains at
   `.tools/release-1.1.1/flatpak-container-verification.log`. The disposable
   container was removed; its homes, buses, keyring and audio service were
   never mounted from the host. The upstream helper emitted an unused-result
