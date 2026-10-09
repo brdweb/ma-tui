@@ -2,7 +2,7 @@
 
 ## Accepted scope
 
-Rust + Ratatui Linux TUI; Music Assistant 2.10.2 is the initial integration
+Rust + Ratatui Linux TUI; Music Assistant 2.10.5 is the current integration
 target. Local playback is included from the first implementation, not a later
 phase. Embed `sendspin = "=0.3.7"`; do not introduce a companion player process.
 Commit Cargo.lock when changes are reviewed. MA-TUI is MIT licensed; third-party
@@ -53,8 +53,8 @@ whose worker cannot finish within two seconds is not reopened concurrently.
 
 ## Versioned integration references
 
-- MA HTTP handler: https://github.com/music-assistant/server/tree/2.10.2/music_assistant/controllers/webserver
-- MA Sendspin authentication: https://github.com/music-assistant/server/blob/2.10.2/music_assistant/controllers/webserver/sendspin_proxy.py
+- MA HTTP handler: https://github.com/music-assistant/server/tree/2.10.5/music_assistant/controllers/webserver
+- MA Sendspin authentication: https://github.com/music-assistant/server/blob/2.10.5/music_assistant/controllers/webserver/sendspin_proxy.py
 - Sendspin 0.3.7: https://github.com/Sendspin/sendspin-rs/tree/v0.3.7
 - Audio output: https://github.com/Sendspin/sendspin-rs/blob/v0.3.7/src/audio/synced_player.rs
 - Desktop integration reference (not a dependency): https://github.com/music-assistant/desktop-app/blob/main/src-tauri/src/sendspin/mod.rs
@@ -65,10 +65,34 @@ to ProtocolClientBuilder. Do not copy the upstream player example wholesale:
 the application must manage decoder replacement, volume/mute, format validation,
 cancellation, audio-thread lifetime and reconnects.
 
-The MA 2.10.2 HTTP `/api` response is the bare JSON command result, not the
+The MA 2.10.5 HTTP `/api` response is the bare JSON command result, not the
 WebSocket response envelope. Resolve a selected player's active queue before
 queue commands; volume commands still target the player itself. Submit explicit
 `replace` or `add` options for play-media requests rather than relying on defaults.
+
+### Stable target review (2026-10-09)
+
+The 1.1.1 candidate targets stable Music Assistant 2.10.5. Source comparison
+against 2.10.2 found no removed API commands in the reviewed music, playlist,
+player and queue controllers. `music/mark_played` and `music/mark_unplayed`
+add an optional `provider_instance_id`; existing client calls remain valid.
+The `/ws` handler and authenticated `/sendspin` proxy are unchanged, and both
+server versions pin `aiosendspin[server]==9.1.1` and `av==16.1.0`. Retain the
+Rust Sendspin 0.3.7 pin and existing audio buffer bounds.
+
+Music Assistant's intervening stable releases fix saved-position resume when
+a podcast/audiobook queue advances, group transitions, reconnect position and
+universal-player identity. These are server-side changes, not new MA-TUI
+behaviour. Autoplay defaults to off from 2.10.3; queues following the server
+default may stop at the end unless the user enables autoplay.
+
+Sources: [stable release](https://github.com/music-assistant/server/releases/tag/2.10.5),
+[stable comparison](https://github.com/music-assistant/server/compare/2.10.2...2.10.5),
+and [Sendspin manifest](https://github.com/music-assistant/server/blob/2.10.5/music_assistant/providers/sendspin/manifest.json).
+The dated sections below retain their original 2.10.2 evidence. Source review
+and synthetic fixtures do not establish live 2.10.5 compatibility; see the
+candidate publication gates in `docs/releasing.md`. The 2.11 personal
+favourite/event changes and Sendspin 1.0 RC are outside this release.
 
 ## Event stream (2026-09-16)
 
@@ -232,9 +256,9 @@ state. Both are null when the provider does not report progress, which is not
 the same as "not played": nothing is shown then rather than claiming unplayed.
 
 A podcast opens into `music/podcasts/podcast_episodes`. An audiobook does not
-open into anything: 2.10.2 has no chapter model at all, only
-`audiobook_versions`, so an audiobook is one playable item with a resume point.
-Do not build a chapter listing against this server version.
+open into a chapter listing: 2.10.2 exposes only `audiobook_versions` beyond
+the base media APIs. Chapter bookmarks can exist in metadata, but this browser
+treats an audiobook as one playable item with a resume point.
 
 There is no server-side filter for unplayed episodes: `library_items` takes
 `played_only`, which selects the opposite, and has no unplayed equivalent. The

@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.1 — 2026-10-09
+
+### Music Assistant compatibility
+
+- Target stable Music Assistant 2.10.5, retaining the Sendspin 0.3.7 client and
+  existing HTTP, event and local-audio integration. No 2.11-only features are
+  included.
+- Align offline connection fixtures with server version 2.10.5 and API schema
+  65. A disposable real 2.10.5 server also passed authentication, local-speaker
+  registration, synthetic audio into ALSA null, progress, live volume updates,
+  and queue clearing from the terminal.
+- Update compatibility and package guidance without relabeling historical
+  2.10.2 physical-playback results as 2.10.5 validation.
+- Add disposable-container Flatpak build/verification with private keyring and
+  null audio output. Sandbox, terminal/controller and silent audio checks pass;
+  physical desktop playback and media-key qualification remain unperformed.
+- Keep bounded audio-byte reservations compatible with Rust 1.99's atomic API
+  deprecation without raising the compiler requirement or changing queue limits.
+
+Music Assistant 2.10.3 changed the server's autoplay default to off. Queues
+following that default may stop at the end; MA-TUI's autoplay control remains
+available. The server's resume, grouping and reconnect fixes require no new
+MA-TUI command format.
+
 ## 1.1.0 — 2026-09-25
 
 ### Queue and playback

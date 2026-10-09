@@ -16,7 +16,7 @@ no companion player process is required.
 - See album art and a spectrum of MA-TUI's own output while it plays.
 - Save credentials in the desktop keyring; follow live Omarchy theme changes.
 
-MA-TUI targets **Music Assistant 2.10.2**. Its 1.0 scope is complete and stable,
+MA-TUI targets **Music Assistant 2.10.5**. Its 1.0 scope is complete and stable,
 but other server versions and audio devices may behave differently.
 See [Known limitations](#known-limitations).
 
@@ -288,10 +288,14 @@ audio devices or an unlocked keyring, along with validation evidence, are in
 
 ## Known limitations
 
-Validation has covered login, browsing, podcast progress, the event stream, local
-speaker registration and local/remote playback against Music Assistant 2.10.2 —
-not every device or server version, and not acoustic latency or multi-room
-synchronization.
+Historical live validation covered login, browsing, podcast progress, the event
+stream, speaker registration and local/remote playback on Music Assistant 2.10.2.
+The 2.10.5 candidate also passed authentication, local-speaker registration,
+synthetic playback into ALSA null, progress, volume events and queue clearing
+against a disposable real 2.10.5 server. Null output does not prove audible
+playback; desktop/physical-output qualification remains required before
+publication. Not every device, provider, acoustic latency or multi-room setup
+has been tested.
 
 State arrives on Music Assistant's event stream, with polling as a fallback; very
 large queues still cost extra requests when their contents change, and the
@@ -304,7 +308,7 @@ has no image protocol at all — and a multiplexer will generally not forward
 either.
 
 MA-TUI does not administer users, providers, DSP or the MA server. Audiobooks
-have no chapter navigation, because Music Assistant 2.10.2 has no chapter model.
+have no chapter navigation; the 2.10.5 integration treats a book as one playable item.
 Player support varies; server rejections appear as command errors. Playlist
 additions finish in the background on the server, and radio uses Music
 Assistant's dynamic radio playlists. Prolonged playback, broader hardware and

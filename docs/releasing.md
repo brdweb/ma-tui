@@ -1,7 +1,7 @@
 # Releases
 
-Releases require explicit user authorization. This tree targets `v1.1.0`;
-the previous release is `v1.0.0`.
+Releases require explicit user authorization. This tree prepares `v1.1.1` for
+Music Assistant 2.10.5; the previous release is `v1.1.0`.
 `v0.9.0` was the first as ma-tui. `v0.1.0-beta.2` was
 published as local-matui before the rename, and `v0.1.0-beta.1` under that same
 former name and withdrawn the same day; its tag and assets were deleted rather
@@ -51,6 +51,107 @@ does not have: `0.9.0` is used as is. The package is unsigned and no AUR or
 distribution-repository publication is implied. No service is deployed. The
 Flatpak application branch is `stable`; it was `beta` while the releases were,
 and a ref is not upgraded across branches.
+
+## 1.1.1 preparation (2026-10-09)
+
+Music Assistant [2.10.5](https://github.com/music-assistant/server/releases/tag/2.10.5)
+is already stable (published 2026-10-02); this release is not waiting for an
+upstream stable promotion. The candidate retains Sendspin 0.3.7 and excludes
+2.11-only features. Candidate qualification did not publish, tag or install
+on the host. Final GitHub publication and Omapak submission were subsequently
+authorized on 2026-10-09, with the desktop coverage limits below retained.
+
+### Candidate evidence
+
+- Built with the repository-local Rust 1.98.1 toolchain in a disposable Ubuntu
+  24.04 container. Formatting and strict Clippy passed; ordinary Rust targets
+  passed with 224 tests and 14 ignored. The locked optimized executable reports
+  `ma-tui 1.1.1`; its native glibc requirement is 2.39.
+- All five native PTY fixtures passed: demo quit, demo SIGTERM, connected
+  controller, password settings and token settings. The settings fixture still
+  emits its previously documented background assertions for unsupported `/ws`
+  requests; these passes do not qualify its event path.
+- The real CPAL null-output integration and three opt-in device-output tests
+  passed: callback progress/buffer size, the full advertised PCM buffer, and
+  delay resets before audio/after clock reset.
+- All 13 packaging build-input tests passed. The staged candidate Arch package
+  passed install, integrity, version, desktop/icon/license checks, demo,
+  device enumeration, terminal/controller fixtures and removal in a disposable
+  Arch container. This was a dirty precommit candidate, not final-source
+  provenance or verification of a GitHub CI artifact.
+- RustSec audit scanned 403 locked dependencies with the fetched advisory
+  database and reported no vulnerabilities. Its crates.io index refresh emitted
+  a registry-path warning; this is not evidence of registry freshness.
+- The earlier disposable-container attempt installed Platform 26.08, but
+  failed before package construction with Bubblewrap's
+  `Creating new namespace failed: Operation not permitted`, even with private
+  system and session buses. No artifact was qualified by that attempt.
+  The cause was the rootless Docker container defaults, not the VM: seccomp
+  blocked `unshare(CLONE_NEWUSER)` and masked `/proc` prevented mounting proc.
+  Both per-container options, `--security-opt seccomp=unconfined` and
+  `--security-opt systempaths=unconfined`, are required. Never apply them
+  daemon-wide or to other containers; `--cap-add SYS_ADMIN` is not a substitute.
+- The corrected Ubuntu 24.04 container run used both options only on that
+  disposable container. A non-root builder (UID 1001) reused the qualified
+  native executable; its SHA256 remained
+  `42fc9d593de0638c58ef8ef09d9625b0d94fc65e06b85a853992ffd97fed3b72`.
+  `python3 packaging/flatpak/build.py` built the helper with Ubuntu GCC 13.3,
+  installed the bundle with `flatpak install --user --noninteractive`, and
+  passed `flatpak run io.github.brdweb.MaTui` with `--version`,
+  `--demo --snapshot` and `--list-devices`.
+- `python3 packaging/flatpak/verify.py` reached `FLATPAK VERIFIED`: installed
+  binary/helper and documentation identities, native-config isolation,
+  synthetic GNOME keyring store/lookup/clear, PTY quit and SIGTERM, local
+  controller fixtures and the silent default-output test all passed. The
+  private session used `dbus-run-session` and PulseAudio's `ma_tui_fixture`
+  null sink. No Omarchy theme was present, so its conditional identity check
+  did not run. Audible playback, media keys, notifications and real desktop
+  integration were not qualified.
+- The verified bundle is
+  `.tools/flatpak-package/ma-tui-v1.1.1-linux-x86_64.flatpak`, SHA256
+  `3b602b408d2017b0cf9c2f2a75f7598ef1821157448a3afe52794f634d35bde0`.
+  Matching `BUILDINFO.json` and `VERIFIED.json` are retained beside it; the
+  successful container output is
+  `.tools/release-1.1.1/flatpak-container-verification.log`. The disposable
+  container was removed; its homes, buses, keyring and audio service were
+  never mounted from the host. The upstream helper emitted an unused-result
+  compiler warning, and ALSA device enumeration warned about absent physical
+  cards/OSS; neither prevented the verified PulseAudio default-output test.
+- A disposable official Music Assistant 2.10.5 container, API schema 65,
+  passed real-TUI authentication, Sendspin registration, synthetic WAV playback
+  accepted by ALSA null, advancing queue position, an external volume update
+  reaching the TUI, queue clear via F4/c, and terminal restoration. The image
+  digest was `sha256:28023f8c0d96ca2496391f3218a6d70d7ef3ba84db846b3a3f3cd9ce7ef8aedc`.
+  Only a synthetic account/media and private temporary server data were used;
+  no existing Music Assistant server or physical speaker was accessed.
+
+Native, Arch and target-server logs are retained under
+`.tools/release-1.1.1/`. The disposable server was stopped and removed. The
+synthetic HTTP audio server logged a connection reset during stream shutdown;
+all target-server assertions passed. Null output is not audible-playback proof.
+
+### Publication gates
+
+1. Desktop/provider qualification remains incomplete: audible local output,
+   the intended remote speaker, media keys, notifications, codecs, restart
+   and multi-room coverage must not be claimed from container/null output.
+   Publication was authorized with these limitations explicitly documented.
+2. Build and verify the Flatpak against Platform 26.08. This gate can be met
+   in a disposable container using both sandbox options above, a private
+   session bus, unlocked Secret Service and PulseAudio-compatible null output;
+   see `packaging/flatpak/README.md`. Container null output does not qualify
+   audible desktop playback, media keys, notifications or desktop integration.
+   Native and Arch verification do not satisfy the Flatpak gate.
+3. With authorization, commit/merge the preparation, obtain a passing CI/audit
+   run for that exact main commit, and use its release-build artifact. Restage
+   and reverify packages against that clean committed source, including the
+   final documentation. Candidate packages do not establish final provenance.
+4. Run the existing release bundler only after both package gates pass. It
+   requires clean source and matching package identities/Flatpak verification.
+   Tagging, upload, publication and hosted-asset checks follow the authorized
+   procedure above. Omapak builds independently from the tag through its
+   catalog recipe; submission does not establish publication until its human
+   maintainer merges and the repository build/deployment succeeds.
 
 ## 1.0.0 validation (2026-09-23)
 

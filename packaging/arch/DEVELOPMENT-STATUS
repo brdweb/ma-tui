@@ -1,7 +1,11 @@
-MA-TUI — 1.0 RELEASE
+MA-TUI — 1.1.1 RELEASE CANDIDATE
 
 MA-TUI is licensed under the MIT License; see the accompanying LICENSE file.
-This 1.0 release is complete for its stated scope; see Known limitations.
+This candidate targets Music Assistant stable 2.10.5. A disposable real server
+passed authentication, local-speaker registration and synthetic null-output
+playback/control checks. Final package and desktop/physical-output qualification
+remain publication gates. Historic confirmed physical playback evidence remains
+for MA 2.10.2. See Known limitations in the accompanying README.
 Third-party software retains its own licenses; copies of shipped crate license
 and notice files, package license declarations, and Rust runtime copyright
 notices are in the accompanying third-party directory.

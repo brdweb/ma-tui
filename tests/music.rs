@@ -970,8 +970,8 @@ fn recently_played_shelf_parses_item_mappings() {
     assert!(item.playable);
 }
 
-/// Podcasts open into episodes; audiobooks deliberately do not, because MA
-/// 2.10.2 has no chapter model to open into.
+/// Podcasts open into episodes; MA 2.10.5 has no separate audiobook chapter-list
+/// API. Optional `metadata.chapters` are bookmarks, not separately playable items.
 #[test]
 fn podcasts_open_into_episodes_and_audiobooks_stay_a_single_item() {
     let podcast = Media::parse(

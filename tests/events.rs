@@ -123,10 +123,10 @@ async fn the_stream_authenticates_past_the_server_greeting_and_forwards_events()
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
-        // Music Assistant sends its server information first, unprompted.
+        // Offline 2.10.5 greeting; constants.py declares API_SCHEMA_VERSION = 65.
         socket
             .send(Message::text(
-                json!({"server_version":"2.10.2","schema_version":65}).to_string(),
+                json!({"server_version":"2.10.5","schema_version":65}).to_string(),
             ))
             .await
             .unwrap();

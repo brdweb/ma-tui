@@ -1,5 +1,8 @@
 MA-TUI @VERSION@ — Omarchy / Arch Linux x86-64
 
+Targets Music Assistant stable 2.10.5. See the accompanying README for
+validation coverage and known limitations.
+
 Install on your LOCAL Omarchy computer, not inside the SSH session:
 
     sha256sum --ignore-missing -c SHA256SUMS
@@ -62,7 +65,7 @@ rename only the old user executable after validating the package installation.
 The release BUILDINFO.json records the executable build origin and compiler.
 Arch makepkg wraps that executable; it is not an Arch source rebuild or an
 official repository/AUR package.
-Live local and remote playback on Music Assistant 2.10.2 is confirmed on the
-development laptop. Other hardware, prolonged playback, server restart during
-streaming, codec/format transitions and multi-room sync are not covered by the
-testing behind this release.
+Historical live local and remote playback on Music Assistant 2.10.2 was confirmed
+on the development laptop. That evidence is not live 2.10.5 validation. Other
+hardware, prolonged playback, server restart during streaming, codec/format
+transitions and multi-room sync are not covered by that historical evidence.

@@ -999,8 +999,8 @@ async fn players_reads_bare_http_result_not_websocket_envelope() {
     assert!(requests[0]["message_id"].is_string());
 }
 
-/// Unplayed episodes are assembled here because MA 2.10.2 has no filter for
-/// them: the shows are listed, then each is asked for its episodes.
+/// MA 2.10.5 still has only `played_only`, not an unplayed library filter:
+/// the shows are listed, then each is asked for its episodes and filtered here.
 #[tokio::test]
 async fn unplayed_episodes_are_gathered_across_every_show() {
     use ma_tui::music::Target;

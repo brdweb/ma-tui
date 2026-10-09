@@ -1,6 +1,6 @@
 //! Embedded, authenticated Music Assistant Sendspin player.
 //!
-//! Compatibility source: music-assistant/server tag 2.10.2,
+//! Compatibility source: music-assistant/server tag 2.10.5,
 //! controllers/webserver/controller.py (`GET /sendspin`) and
 //! controllers/webserver/sendspin_proxy.py (`auth` then `auth_ok`).
 //!
@@ -917,13 +917,24 @@ async fn session(
         };
         let send_audio = |chunk: sendspin::protocol::client::AudioChunk| {
             let bytes = chunk.data.len();
-            queued_audio
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
-                    queued
-                        .checked_add(bytes)
-                        .filter(|next| *next <= MAX_ENCODED_WORK_BYTES)
-                })
-                .map_err(|_| anyhow::anyhow!("Audio worker encoded queue full"))?;
+            // Keep the bounded reservation compatible with older Rust toolchains;
+            // fetch_update was deprecated in Rust 1.99.
+            let mut queued = queued_audio.load(Ordering::Acquire);
+            loop {
+                let next = queued
+                    .checked_add(bytes)
+                    .filter(|next| *next <= MAX_ENCODED_WORK_BYTES)
+                    .ok_or_else(|| anyhow::anyhow!("Audio worker encoded queue full"))?;
+                match queued_audio.compare_exchange_weak(
+                    queued,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(current) => queued = current,
+                }
+            }
             if work
                 .try_send((epoch.load(Ordering::Acquire), Work::Audio(chunk)))
                 .is_err()
@@ -1036,7 +1047,7 @@ pub fn start(config: AudioConfig, spectrum: Option<Arc<dyn SampleSink>>) -> Resu
 pub(crate) fn formats_for_ranges(ranges: &[(u16, u32, u32)]) -> Vec<AudioFormatSpec> {
     let mut result = Vec::new();
     // The device output sample representation is independent of wire depth.
-    // PCM first avoids compressed-codec compatibility surprises on MA 2.10.2.
+    // PCM first avoids compressed-codec compatibility surprises on MA 2.10.5.
     for (codec, bit_depth) in [
         ("pcm", 16),
         ("pcm", 24),
@@ -1075,7 +1086,7 @@ pub(crate) struct QueueBudget {
     error: Option<&'static str>,
 }
 
-// MA 2.10.2's aiosendspin 9.1.1 accounts ENCODED bytes and permits a 30s
+// MA 2.10.5's aiosendspin 9.1.1 accounts ENCODED bytes and permits a 30s
 // buffered horizon. Our i32 queue needs up to 30 * 96000 * 2 * 4 bytes,
 // independently of the 2 MiB encoded capacity advertised in client/hello.
 const MAX_DECODED_QUEUE_BYTES: usize = 32 * 1024 * 1024;
@@ -1420,7 +1431,7 @@ fn stream_error_detail(raw: &str) -> String {
     format!("Audio output device reported a stream error: {error}")
 }
 
-/// MA 2.10.2 mounts the authenticated receiver at /sendspin.
+/// MA 2.10.5 mounts the authenticated receiver at /sendspin.
 pub(crate) fn proxy_url(base: &str) -> Result<url::Url> {
     let mut url = url::Url::parse(base).map_err(|_| anyhow::anyhow!("Invalid audio server URL"))?;
     let scheme = match url.scheme() {

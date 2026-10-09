@@ -1,8 +1,13 @@
 # Omarchy / Arch package
 
-This wraps the tested Linux x86-64 release executable with Arch's real `makepkg`.
+This wraps the Linux x86-64 release executable with Arch's real `makepkg`.
 It is not a source rebuild on Arch, AUR submission, signed release or deployment.
 No install script, service, credentials or personal configuration is included.
+
+The current candidate is MA-TUI 1.1.1, targeting Music Assistant stable 2.10.5.
+Native and Arch candidate checks passed, along with a disposable real 2.10.5
+null-output smoke. Final committed-build package and desktop qualification
+remain publication gates; see `docs/releasing.md` for evidence and limits.
 
 ## Build and test
 
@@ -55,21 +60,27 @@ The minimal Arch image excludes documentation via NoExtract; remove that setting
 only inside the disposable test container so package integrity covers the guide.
 Never change the user's pacman policy to make tests pass.
 
-The successful validation image digest was:
+The historical successful validation image digest was:
 `archlinux:base@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a`.
 The container updated its packages from Arch repositories before building. Pinning
 the base image alone does not make that update or the binary build reproducible.
 `.BUILDINFO` describes the wrapping environment, not the original Rust compiler
 host. `Cargo.lock` and the generated PKGBUILD source checksum identify the inputs.
 
-The result is named in `.tools/arch-package/PACKAGE-NAME`; for this release it is
-`ma-tui-1.1.0-1-x86_64.pkg.tar.zst`. Version, glibc requirement and install
+The result is named in `.tools/arch-package/PACKAGE-NAME`; for this candidate it is
+`ma-tui-1.1.1-1-x86_64.pkg.tar.zst`. Version, glibc requirement and install
 instructions are derived from the manifest and built executable. The desktop
 launcher is included and validated during package installation.
 Copy only a successfully verified package into ignored `dist/`, and create its
 checksum using `sha256sum` with a relative package filename. Keep verification logs
 in `.tools/`. Do not claim signing, publishing, physical playback or live-server
 compatibility based on this packaging test. `INSTALL.txt` is the user-facing guide.
+
+Staging requires a matching executable, Cargo's offline locked dependency
+sources, compiler runtime notices and `readelf`. A dirty candidate's recorded
+HEAD is not final-source provenance. After committing, restage and reverify
+the exact final build input; release bundling also requires verified Flatpak
+output and a clean tree.
 
 After merging the tested source tree, `python3 packaging/release.py` bundles the
 verified package, native binary archive, source and build information in a versioned
