@@ -1,11 +1,16 @@
 # Flatpak bundle
 
-Download `ma-tui-v1.1.0-linux-x86_64.flatpak` and `SHA256SUMS` from
+The current candidate is MA-TUI 1.1.1, targeting Music Assistant stable 2.10.5.
+Candidate qualification evidence and remaining desktop/publication gates are
+documented in `docs/releasing.md`.
+
+After an authorized release is published, download
+`ma-tui-v1.1.1-linux-x86_64.flatpak` and `SHA256SUMS` from
 the GitHub release, then run:
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
-flatpak install --user ./ma-tui-v1.1.0-linux-x86_64.flatpak
+flatpak install --user ./ma-tui-v1.1.1-linux-x86_64.flatpak
 flatpak run io.github.brdweb.MaTui
 ```
 
@@ -56,7 +61,7 @@ headers and `desktop-file-validate`. No flatpak-builder or compiler SDK is neede
 cargo build --release --locked
 python3 packaging/arch/stage.py
 python3 packaging/flatpak/build.py
-flatpak install --user --noninteractive .tools/flatpak-package/ma-tui-v1.1.0-linux-x86_64.flatpak
+flatpak install --user --noninteractive .tools/flatpak-package/ma-tui-v1.1.1-linux-x86_64.flatpak
 flatpak run io.github.brdweb.MaTui --version
 flatpak run io.github.brdweb.MaTui --demo --snapshot
 flatpak run io.github.brdweb.MaTui --list-devices
@@ -68,6 +73,57 @@ PulseAudio output. It runs local protocol/terminal fixtures and a silent real
 audio stream; it never connects to your Music Assistant server. Do not run
 another instance of this Flatpak during the SIGTERM fixture.
 
+### Disposable container build and verification
+
+Build inside a conventional Linux container, **not a host Nix shell**. A
+Nix-host-built `ma-tui` or `secret-tool` can require a `/nix/store` ELF loader
+that does not exist in the Flatpak runtime. Reuse a container-built executable
+with glibc no newer than Platform 26.08, or the matching GitHub CI artifact.
+
+The Ubuntu 24.04 workflow below reuses the staged native candidate and its
+matching repository-local GNU Rust toolchain under `.tools/rustup`. If the
+candidate is not staged, run `python3 packaging/arch/stage.py` in its native
+build container first. Do not rebuild the qualified release executable here.
+
+```sh
+mkdir -p .tools/flatpak-package
+docker --host unix:///run/user/1001/docker.sock run --rm \
+  --name ma-tui-flatpak-verify \
+  --security-opt seccomp=unconfined \
+  --security-opt systempaths=unconfined \
+  -e BUILD_UID="$(id -u)" \
+  -v "$PWD:/source:ro" \
+  -v "$PWD/.tools/flatpak-package:/output" \
+  ubuntu:24.04 bash /source/packaging/flatpak/verify-container.sh
+```
+
+Both options are required on the `hermes` rootless Docker daemon: its default
+seccomp profile blocks `unshare(CLONE_NEWUSER)`, while masked `/proc` prevents
+Bubblewrap from mounting proc. Either exception alone is insufficient;
+`--cap-add SYS_ADMIN` is not a replacement. Apply these exceptions **only to
+this disposable Flatpak container**, never daemon-wide or to other containers.
+
+The script installs Flatpak, compiler/libsecret headers, Python, Cargo and
+`uv`; the matching Rust toolchain takes precedence over distribution Cargo.
+The builder UID matches the invoking user's numeric UID. Rootless bind mounts
+map their owner to container root, so the script copies allowlisted repository
+and candidate inputs to a builder-owned workspace instead of changing mount
+ownership. It builds and installs the bundle as that non-root user.
+
+All services and state are private to the container: a system bus,
+`dbus-run-session`, a GNOME Secret Service unlocked with a throwaway password,
+and PulseAudio with the `ma_tui_fixture` null sink as default output. No real
+home, keyring, configuration, audio socket or Music Assistant server is used.
+It runs `--version`, `--demo --snapshot`, `--list-devices`, then `verify.py`
+through `FLATPAK VERIFIED`. Only a successful run exports the bundle,
+`BUILDINFO.json` and `VERIFIED.json` into `.tools/flatpak-package`.
+
+The null sink qualifies sandbox audio access and the silent stream test, not
+audible desktop output. Physical playback, desktop media keys, notifications
+and desktop integration still require separate qualification. A dirty
+candidate's verification record is not final committed-source provenance.
+
+
 For a verified GitHub Actions build, set `MA_TUI_CI_BUILD` to the extracted
 `ma-tui-release-build` artifact directory instead of running the local Cargo
 build. Keep that setting for Arch staging, Flatpak building and final bundling;
@@ -78,6 +134,12 @@ its pinned source download, and records binary/helper/runtime identities. It
 wraps the native binary and compiles the helper locally; it does not claim a
 reproducible or signed build. The application branch is `stable`.
 See [release procedure](../../docs/releasing.md) for publication checks.
+
+Bundle names and recorded versions are derived from `Cargo.toml`, not these
+example filenames. Final release bundling requires a clean committed tree, a
+matching restaged executable, verified Arch package and installed Flatpak bundle
+verification record. Rebuild/reverify when the final build input changes; old
+package artifacts or verification records do not qualify this candidate.
 
 Official references: [single-file bundles](https://docs.flatpak.org/en/latest/single-file-bundles.html),
 [sandbox permissions](https://docs.flatpak.org/en/latest/sandbox-permissions.html),

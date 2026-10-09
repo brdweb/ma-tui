@@ -53,7 +53,7 @@ on its screen, rather than searching the raw byte history. Tests use `uv run
 --with pyte python ...`; Python is not a runtime dependency of MA-TUI.
 
 A successful localhost fixture exchange is not proof of live MA compatibility.
-For stable qualification, validate actual MA 2.10.2 authentication, player registration,
+For stable qualification, validate actual MA 2.10.5 authentication, player registration,
 physical-device sound, codec/format changes, server restart and multi-room sync
 with explicit authorization. Retain the exact sendspin 0.3.7 pin during that work.
 

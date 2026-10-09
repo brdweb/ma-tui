@@ -1,6 +1,6 @@
-//! Music Assistant 2.10.2 HTTP API (bare JSON results, not WS result envelopes).
-//! Verified against server tag 2.10.2 controllers/webserver/controller.py and
-//! the official music-assistant/client player_queues.py command signatures.
+//! Music Assistant 2.10.5 HTTP API (bare JSON results, not WS result envelopes).
+//! Source-reviewed against server tag 2.10.5 controllers/webserver/controller.py
+//! and controllers/player_queues/controller.py command signatures.
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
@@ -357,8 +357,7 @@ impl ApiClient {
     /// Start a dynamic radio playlist seeded from this item.
     pub async fn start_radio(&self, player_id: &str, uri: &str) -> Result<()> {
         let queue = self.active_queue(player_id).await?;
-        // MA 2.10.2 deprecates `radio_mode` in favour of a radio playlist
-        // (queues.py:506-507); client_queues.py:25-35 defines this URI form.
+        // MA uses a dynamic radio playlist URI rather than deprecated radio_mode.
         let radio_uri = if uri.starts_with("radio_playlist://") {
             std::borrow::Cow::Borrowed(uri)
         } else {

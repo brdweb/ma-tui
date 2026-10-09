@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # Music Assistant 2.10.2 requires this exact Sendspin client version.
+      # Retain the Sendspin client qualified for MA-TUI's stable integration.
       - dependency-name: sendspin
         versions: ['>0.3.7']
       # sendspin 0.3.7 exposes tokio-tungstenite 0.29 WebSocket types.

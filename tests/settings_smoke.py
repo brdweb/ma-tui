@@ -35,7 +35,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         assert self.path == prefix + '/info'
         assert 'Authorization' not in self.headers
-        self.reply({'server_version':'2.10.2', 'schema_version': 40})
+        # Offline 2.10.5 /info fixture; upstream API_SCHEMA_VERSION is 65.
+        self.reply({'server_version':'2.10.5', 'schema_version': 65})
     def do_POST(self):
         global fail_token_once
         req = json.loads(self.rfile.read(int(self.headers['Content-Length'])))

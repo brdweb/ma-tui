@@ -1,7 +1,7 @@
 //! Music Assistant's event stream, so the interface learns about a change when
 //! it happens instead of re-asking on a timer.
 //!
-//! Verified against server tag 2.10.2
+//! Source-reviewed against server tag 2.10.5
 //! `controllers/webserver/websocket_client.py`: the socket carries the same
 //! command envelope as HTTP `/api`, the first command must be `auth`, and after
 //! it succeeds the server subscribes the connection itself — there is no
@@ -203,7 +203,7 @@ pub fn translate(value: &serde_json::Value) -> Option<Event> {
     }
 }
 
-/// MA 2.10.2 serves the event socket at /ws, alongside the HTTP API.
+/// MA 2.10.5 serves the event socket at /ws, alongside the HTTP API.
 pub(crate) fn events_url(base: &str) -> Result<url::Url> {
     let mut url = url::Url::parse(base).map_err(|_| anyhow!("Invalid server URL"))?;
     let scheme = match url.scheme() {

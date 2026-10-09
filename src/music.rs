@@ -43,8 +43,8 @@ pub enum Target {
         id: String,
         provider: String,
     },
-    /// A podcast's episodes. Audiobooks have no equivalent: MA 2.10.2 models
-    /// them as one playable item with a resume point, not a chapter list.
+    /// A podcast's episodes. MA 2.10.5 has no separate audiobook chapter-list
+    /// API, so this browser treats a book as one playable item with a resume point.
     Podcast {
         id: String,
         provider: String,
@@ -618,7 +618,7 @@ const MAX_UNPLAYED: usize = 300;
 impl ApiClient {
     /// Every unfinished episode across every show, newest first within each.
     ///
-    /// MA 2.10.2 has no server-side filter for this: `library_items` takes
+    /// MA 2.10.5 has no server-side filter for this: `library_items` takes
     /// `played_only`, which selects the opposite, and there is no unplayed
     /// equivalent. So the shows are listed and then each is asked for its
     /// episodes and filtered here. That is one request per subscription, which
@@ -658,7 +658,7 @@ impl ApiClient {
                     .filter(|episode| !episode.fully_played)
                     .collect();
                 // Within a show the newest episode is the one to reach for,
-                // and position is the only ordering 2.10.2 gives us.
+                // and position supplies the server's episode order.
                 episodes.reverse();
                 Ok::<_, anyhow::Error>(episodes)
             })
