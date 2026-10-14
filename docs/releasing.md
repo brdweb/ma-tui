@@ -9,9 +9,13 @@ than rewritten. MA-TUI is MIT licensed; include the root LICENSE in all new
 packages alongside third-party notices. A prerelease tag must not be labeled as
 a stable/latest release; a release that is one may be.
 
-1. Update Cargo.toml/Cargo.lock and CHANGELOG.md on the feature branch. Run
-   `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
-   `cargo test --all-targets --locked`, and `cargo build --release --locked`.
+1. Update Cargo.toml/Cargo.lock, CHANGELOG.md and affected user/package docs on
+   the feature branch. After changing the package version, use
+   `cargo check --offline` to refresh the root lockfile entry before locked checks.
+   Run `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`,
+   `cargo test --all-targets --locked`, `python3 tests/packaging_build_input.py`,
+   and `cargo build --release --locked`. Packaging fixtures must include every
+   new staged asset, including desktop icons; Rust tests alone do not cover them.
 2. Run the release binary through the demo, connected-controller and both settings
    PTY fixtures listed in README.md. Keep live-test authorization and known gaps
    explicit; fixture results do not demonstrate acoustic latency or multi-room sync.
@@ -40,6 +44,9 @@ a stable/latest release; a release that is one may be.
    embedded executable version/hash, and confirm the tag, source commit, intended
    repository visibility and prerelease flag. Never claim signing or reproducible builds
    unless those checks were actually performed.
+7. Only after the GitHub build and published assets pass verification, submit
+   the corresponding Omapak recipe update using the checklist below. A GitHub
+   release does not establish that Omapak's separate source build succeeds.
 
 Artifacts include the native Linux archive, Arch package, Flatpak bundle, source archive,
 BUILDINFO.json and SHA256SUMS. The binary archives include third-party notices
@@ -51,6 +58,66 @@ does not have: `0.9.0` is used as is. The package is unsigned and no AUR or
 distribution-repository publication is implied. No service is deployed. The
 Flatpak application branch is `stable`; it was `beta` while the releases were,
 and a ref is not upgraded across branches.
+
+## Operational safeguards
+
+- Keep the selected source commit fixed during final packaging. Preserve file
+  modes when extracting the CI artifact, check its `SHA256SUMS` from the download
+  directory, and keep `MA_TUI_CI_BUILD` set for every final packaging command.
+  Do not mix locally built and CI-built executables or reuse verification records
+  from an earlier bundle.
+- Bundle replacement needs `flatpak install --user --reinstall <bundle>` on the
+  tested host; ordinary install and `--or-update` rejected an existing app.
+  Reinstallation can leave the old process running. Stop it before launching a
+  replacement, and never launch two copies with the same local speaker identity.
+- The standard Flatpak verifier touches a disposable Secret Service item and
+  opens a silent real default-output stream. Follow repository safety rules and
+  obtain explicit authorization for these actions and any playback interruption.
+  Never read existing keyring items. No live Music Assistant connection is needed.
+- Use full commit SHAs when selecting GitHub Actions runs. Watch the exact run
+  through completion rather than assuming a successful push means a build passed.
+  If the GitHub wrapper produces invalid JSON because a tool-manager shim writes
+  setup messages to stdout, locate the real executable with `mise which gh` and
+  invoke it directly; do not parse shim chatter as a run ID.
+- Once published, do not move the release tag to fix an Omapak-only packaging
+  problem. Correct the catalog recipe on its existing PR branch.
+
+## Omapak source-build checklist
+
+Omapak builds independently from source in
+`outcrop-labs/omapak/apps/io.github.brdweb.MaTui/`. Updating only the Git tag is
+not sufficient.
+
+1. Inspect open MA-TUI PRs first. Use the existing `brdweb/omapak` fork and a
+   release branch to open or update an upstream PR; direct upstream push is not
+   available to this account. Identify superseded requests and close them when
+   authorized rather than leaving competing updates open.
+2. Pin the recipe to both the published tag and its full source commit. Update
+   `metadata.yml`, AppStream release notes, required runtime/SDK, finish
+   permissions, and desktop/icon installation commands together.
+3. **Regenerate `cargo-sources.json` from that exact tag's `Cargo.lock` on every
+   release.** Include every external dependency, not just host-platform crates.
+   For registry crates, retain the exact name/version, archive URL and lockfile
+   SHA-256, plus the matching `.cargo-checksum.json` source. Use `config.toml`
+   for the Cargo source replacement. Check source-set and checksum equality;
+   handle any non-registry dependencies explicitly rather than omitting them.
+4. Materialize those sources in a fresh directory with the tagged application
+   source and an isolated `CARGO_HOME`. Run `cargo --offline fetch --locked`,
+   `cargo --offline build --release --locked`, and an offline demo smoke.
+   A warm native Cargo cache must not conceal an incomplete vendor manifest.
+5. Push to the PR branch and wait for Omapak's **real Flatpak `static-build`**
+   check, then the separate **judge-report** workflow. Inspect the new report,
+   not the stale failure comment. Fix any remaining build issue on the same PR.
+6. Report build success, judge recommendation, and merge status separately.
+   A passing build and an “accept” recommendation still require maintainer
+   review/merge; an open PR is not a published catalog update.
+
+The v1.1.0 update initially retained v0.9.3's 378-crate vendor list. Its offline
+build failed on missing `zbus`; 24 dependencies were absent in total. Regenerating
+all 402 external registry packages from the v1.1.0 lockfile fixed the build.
+[PR #191](https://github.com/outcrop-labs/omapak/pull/191) then passed its real
+Flatpak build and received an “accept” recommendation. This is why vendor
+regeneration and upstream build/report verification are mandatory release steps.
 
 ## 1.1.1 publication (2026-10-09)
 
