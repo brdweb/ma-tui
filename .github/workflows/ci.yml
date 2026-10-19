@@ -14,7 +14,6 @@ concurrency:
 
 permissions:
   contents: read
-  checks: write
 
 jobs:
   rust:
@@ -69,13 +68,23 @@ jobs:
 
   advisory-audit:
     name: RustSec advisory audit
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Audit locked dependencies
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - name: Cache audit build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          key: cargo-audit-0.22.2
+
+      - name: Install pinned audit tool
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      # Fail directly on advisories, including on fork and Dependabot PRs.
+      # Do not create issues or require a write-capable GitHub token.
+      - name: Audit locked dependencies
+        run: cargo audit --file Cargo.lock
