@@ -368,7 +368,7 @@ Sources: `controllers/metadata/images.py` and `constants.py` at server tag
 
 ## Desktop integration (2026-09-23)
 
-`src/mpris.rs` uses zbus 5 on the existing Tokio runtime to register
+`src/mpris.rs` uses zbus 6 on the existing Tokio runtime to register
 `org.mpris.MediaPlayer2.ma_tui` while connected, never in `--demo`. Each UI tick
 derives an MPRIS snapshot from `App` and publishes it through a watch channel
 only when it changed. D-Bus transport, seek, volume, shuffle and repeat commands

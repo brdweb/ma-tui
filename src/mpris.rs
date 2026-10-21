@@ -18,7 +18,7 @@ use zbus::{
     connection::Builder,
     interface,
     object_server::{InterfaceRef, SignalEmitter},
-    zvariant::{ObjectPath, OwnedValue, Value},
+    ObjectPath, OwnedVariant, Variant,
 };
 
 const BUS_NAME: &str = "org.mpris.MediaPlayer2.ma_tui";
@@ -559,7 +559,7 @@ impl Player {
     }
 
     #[zbus(property)]
-    fn metadata(&self) -> zbus::fdo::Result<HashMap<String, OwnedValue>> {
+    fn metadata(&self) -> zbus::fdo::Result<HashMap<String, OwnedVariant>> {
         metadata(&self.now())
     }
 
@@ -622,46 +622,46 @@ impl Player {
     async fn seeked(signal_emitter: &SignalEmitter<'_>, position: i64) -> zbus::Result<()>;
 }
 
-fn metadata(now: &NowPlaying) -> zbus::fdo::Result<HashMap<String, OwnedValue>> {
+fn metadata(now: &NowPlaying) -> zbus::fdo::Result<HashMap<String, OwnedVariant>> {
     let path = ObjectPath::try_from(now.track_id.as_str())
         .map_err(|_| zbus::fdo::Error::Failed("Invalid MPRIS track identifier".into()))?;
     let mut values = HashMap::new();
-    values.insert("mpris:trackid".into(), OwnedValue::from(path));
+    values.insert("mpris:trackid".into(), OwnedVariant::from(path));
     if now.track_id == NO_TRACK {
         return Ok(values);
     }
     if !now.title.is_empty() {
         values.insert(
             "xesam:title".into(),
-            metadata_value(Value::new(now.title.clone()))?,
+            metadata_value(Variant::new(now.title.clone()))?,
         );
     }
     if !now.artist.is_empty() {
         values.insert(
             "xesam:artist".into(),
-            metadata_value(Value::new(now.artist.clone()))?,
+            metadata_value(Variant::new(now.artist.clone()))?,
         );
     }
     if !now.album.is_empty() {
         values.insert(
             "xesam:album".into(),
-            metadata_value(Value::new(now.album.clone()))?,
+            metadata_value(Variant::new(now.album.clone()))?,
         );
     }
     if let Some(length) = now.length {
-        values.insert("mpris:length".into(), OwnedValue::from(length));
+        values.insert("mpris:length".into(), OwnedVariant::from(length));
     }
     if let Some(art_url) = &now.art_url {
         values.insert(
             "mpris:artUrl".into(),
-            metadata_value(Value::new(art_url.clone()))?,
+            metadata_value(Variant::new(art_url.clone()))?,
         );
     }
     Ok(values)
 }
 
-fn metadata_value(value: Value<'static>) -> zbus::fdo::Result<OwnedValue> {
-    OwnedValue::try_from(value).map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
+fn metadata_value(value: Variant<'static>) -> zbus::fdo::Result<OwnedVariant> {
+    OwnedVariant::try_from(value).map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
 }
 
 /// Holds the session-bus name and the state watcher for as long as MA-TUI runs.
@@ -677,9 +677,9 @@ impl Mpris {
         notifications: bool,
     ) -> Result<Self> {
         let position = Arc::new(Mutex::new(PositionClock::new(&state.borrow())));
-        let connection = Builder::session()?
-            .name(BUS_NAME)?
-            .serve_at(OBJECT_PATH, MediaPlayer2)?
+        let connection = Builder::session()
+            .name(BUS_NAME)
+            .serve_at(OBJECT_PATH, MediaPlayer2)
             .serve_at(
                 OBJECT_PATH,
                 Player {
@@ -687,7 +687,7 @@ impl Mpris {
                     state: state.clone(),
                     position: position.clone(),
                 },
-            )?
+            )
             .build()
             .await?;
         let player = connection
@@ -866,7 +866,7 @@ async fn notify(connection: &zbus::Connection, replaces_id: u32, now: &NowPlayin
                 now.title.as_str(),
                 body.as_str(),
                 Vec::<String>::new(),
-                HashMap::<String, OwnedValue>::new(),
+                HashMap::<String, OwnedVariant>::new(),
                 -1i32,
             ),
         )
