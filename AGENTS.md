@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Instructions for coding agents in this repository (Cursor cloud agents, Codex, Claude Code). The maintainer reviews and merges.
+Instructions for coding agents in this repository (Cursor cloud agents, Codex, Claude Code). Codex (`chatgpt-codex-connector`) is the only automatic pull request reviewer.
 
 Personal or machine-specific notes never go in tracked files. Claude Code auto-loads the gitignored `CLAUDE.local.md`; Codex users put personal guidance in `~/.codex/AGENTS.md`; `AGENTS.local.md` is a gitignored scratch file that tools don't load automatically.
 
@@ -78,7 +78,16 @@ Use Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `build
 
 ## Review guidance
 
-Bugbot, Codex, and Claude should focus on async and MPRIS correctness, Music Assistant API handling (bare JSON from `/api`, `/ws` replies matched by `message_id`, queue identity kept apart from player identity, no credentials or response bodies in errors), terminal rendering and restoration, and packaging integrity (staged assets, `Cargo.lock`, third-party notices). The agent that opened the PR fixes review findings. The maintainer merges.
+Codex (`chatgpt-codex-connector`) is the only automatic pull request reviewer. Claude Code is optional: someone calls it in with an `@claude` comment, where configured, for risky PRs only, and it never runs automatically. Reviews focus on async and MPRIS correctness, Music Assistant API handling (bare JSON from `/api`, `/ws` replies matched by `message_id`, queue identity kept apart from player identity, no credentials or response bodies in errors), terminal rendering and restoration, and packaging integrity (staged assets, `Cargo.lock`, third-party notices). The agent that opened the PR fixes review findings.
+
+## Review and merge policy
+
+- Bots never post GitHub approvals.
+- A PR merges only after CI is green and every Codex review thread is fixed and resolved.
+- The triage bot may auto-merge only patch and minor dependency bumps, security fixes, docs, tests, and small fixes under about 50 changed lines.
+- Other bots and agents merge only work the maintainer has explicitly approved.
+- Everything else waits for the maintainer: major version bumps, auth, payments, database migrations, CI or release configuration, secrets, and large or ambiguous PRs.
+- Squash merge. Commits carry no Co-Authored-By or other AI co-author trailers.
 
 ## Learning
 
