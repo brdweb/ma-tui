@@ -2,7 +2,7 @@
 
 Instructions for coding agents in this repository (Cursor cloud agents, Codex, Claude Code). The maintainer reviews and merges.
 
-Personal or machine-specific notes belong in gitignored `AGENTS.local.md` and `CLAUDE.local.md`, never in tracked files.
+Personal or machine-specific notes never go in tracked files. Claude Code auto-loads the gitignored `CLAUDE.local.md`; Codex users put personal guidance in `~/.codex/AGENTS.md`; `AGENTS.local.md` is a gitignored scratch file that tools don't load automatically.
 
 ## Project
 
