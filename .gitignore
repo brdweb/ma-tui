@@ -5,8 +5,8 @@
 *.local
 
 # Local development and agent state
-AGENTS.md
-CLAUDE.md
+AGENTS.local.md
+CLAUDE.local.md
 .venv/
 node_modules/
 __pycache__/
