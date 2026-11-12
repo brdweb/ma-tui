@@ -514,6 +514,14 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                 }
             }
         }
+        Update::Transcript { uri, result } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == uri) {
+                details.transcript = Some(match result {
+                    Ok(value) => crate::transcript::Transcript::parse(&value),
+                    Err(error) => crate::transcript::Transcript::Failed(error),
+                });
+            }
+        }
         Update::Notice(text) => app.status = text,
         Update::Playlog => {
             return app.music.progress_changed(std::time::Instant::now());

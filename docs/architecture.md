@@ -353,6 +353,29 @@ computed at word boundaries as the paragraph wraps.
 Sources: `MediaItemMetadata` in music-assistant/models 1.1.205 and
 `helpers/podcast_parsers.py` at server tag 2.10.9.
 
+## Transcripts (2026-11-12, against 2.11.0b8)
+
+From 2.11.0b3, an episode's `metadata.has_transcript` says whether
+`music/podcasts/podcast_episode_transcript(item_id,
+provider_instance_id_or_domain)` has anything. That command takes the
+provider's episode id and answers `[text, cues]`, where a cue is `{start, end,
+text, speaker}` and `[null, null]` means none. Providers: Podcast Feed,
+gPodder, iTunes, Overcast, Podcast Index and Pocket Casts, but not
+Audiobookshelf. On 2.10.x the flag is absent, so nothing is offered.
+
+In the details pane, `t` reads the transcript once and shows it in place of
+the details; `t` again switches back without a new read, and after a failure a
+second `t` retries. The text is preferred and goes through `text::plain`.
+Without it, each cue is cleaned on its own and becomes a line, prefixed with
+the speaker when the source names one, so markup in one cue cannot flatten the
+line breaks. The result is capped at 120,000 characters (an hour of speech is
+about 50,000), and the pane says when it was cut. Following the playback
+position through the cues is a separate step.
+
+Sources: `controllers/music/media/podcasts.py` at server tag 2.11.0b8, and
+`media_items/metadata.py` (`MediaItemTranscriptCue`, `has_transcript`) in
+music-assistant/models 1.1.233.
+
 ## Player-first layout (2026-09-16)
 
 The focused pane is marked by filling its heading rather than enlarging it: a
