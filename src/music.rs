@@ -43,11 +43,13 @@ pub enum Target {
         id: String,
         provider: String,
     },
-    /// A podcast's episodes. MA 2.10.5 has no separate audiobook chapter-list
-    /// API, so this browser treats a book as one playable item with a resume point.
+    /// A podcast's episodes, newest first, a page at a time. MA 2.10.5 has no
+    /// separate audiobook chapter-list API, so this browser treats a book as
+    /// one playable item with a resume point.
     Podcast {
         id: String,
         provider: String,
+        offset: usize,
     },
     /// Server-maintained shelves keep listening activity current without UI state.
     InProgress,
@@ -228,7 +230,11 @@ impl Media {
                 "album" => Some(Target::Album { id, provider }),
                 "playlist" => Some(Target::Playlist { id, provider }),
                 "artist" => Some(Target::Artist { id, provider }),
-                "podcast" => Some(Target::Podcast { id, provider }),
+                "podcast" => Some(Target::Podcast {
+                    id,
+                    provider,
+                    offset: 0,
+                }),
                 _ => None,
             }
         } else {
@@ -615,6 +621,67 @@ const CONCURRENT_SHOWS: usize = 6;
 /// cannot turn into an unbounded read.
 const MAX_UNPLAYED: usize = 300;
 
+/// The first API schema whose `podcast_episodes` returns one sorted page
+/// (2.11.0b6). Older servers ignore `limit` and `offset` and return every
+/// episode in the provider's order.
+pub const PAGED_EPISODES_SCHEMA: u32 = 99;
+
+/// Episodes newest first by the server's `position`, which counts from the
+/// oldest, then by release date. Episodes with neither keep the order they
+/// arrived in, which is the server's own.
+fn newest_first(episodes: &mut [Value]) {
+    episodes.sort_by(|a, b| {
+        let key = |v: &Value| {
+            (
+                v["position"].as_u64(),
+                v["metadata"]["release_date"].as_str().map(str::to_owned),
+            )
+        };
+        key(b).cmp(&key(a))
+    });
+}
+
+impl ApiClient {
+    /// One page of a show's episodes, newest first, and the page after it.
+    ///
+    /// A server that pages is asked for the page. Anything older, or a server
+    /// whose schema is not known yet, is asked for everything (`limit: 0`,
+    /// which a paging server also honours) and paged here, so a long show is
+    /// never cut short at the server's default page size.
+    async fn podcast_episodes(
+        &self,
+        id: &str,
+        provider: &str,
+        offset: usize,
+    ) -> Result<(Vec<Value>, Option<usize>)> {
+        let paged = self.schema_at_least(PAGED_EPISODES_SCHEMA);
+        let (limit, from) = if paged { (PAGE_SIZE, offset) } else { (0, 0) };
+        let listing = self
+            .command(
+                "music/podcasts/podcast_episodes",
+                json!({
+                    "item_id":id,"provider_instance_id_or_domain":provider,
+                    "sort_field":"position","sort_direction":"desc",
+                    "limit":limit,"offset":from,
+                }),
+            )
+            .await?;
+        let mut episodes = listing
+            .as_array()
+            .ok_or_else(|| anyhow!("Invalid podcast episode listing"))?
+            .clone();
+        newest_first(&mut episodes);
+        if paged {
+            let next = (episodes.len() == PAGE_SIZE).then_some(offset + PAGE_SIZE);
+            return Ok((episodes, next));
+        }
+        let total = episodes.len();
+        let page: Vec<Value> = episodes.into_iter().skip(offset).take(PAGE_SIZE).collect();
+        let next = (offset + PAGE_SIZE < total).then_some(offset + PAGE_SIZE);
+        Ok((page, next))
+    }
+}
+
 impl ApiClient {
     /// Every unfinished episode across every show, newest first within each.
     ///
@@ -644,22 +711,14 @@ impl ApiClient {
 
         let listings = futures_util::stream::iter(shows)
             .map(|(id, provider)| async move {
-                let listing = self
-                    .command(
-                        "music/podcasts/podcast_episodes",
-                        json!({"item_id":id,"provider_instance_id_or_domain":provider}),
-                    )
-                    .await?;
-                let mut episodes: Vec<Media> = listing
-                    .as_array()
-                    .ok_or_else(|| anyhow!("Invalid podcast episode listing"))?
+                // Within a show the newest episode is the one to reach for.
+                // Its first page is plenty: the whole list is capped anyway.
+                let (episodes, _) = self.podcast_episodes(&id, &provider, 0).await?;
+                let episodes: Vec<Media> = episodes
                     .iter()
                     .map(|episode| Media::parse(episode, "podcast_episode"))
                     .filter(|episode| !episode.fully_played)
                     .collect();
-                // Within a show the newest episode is the one to reach for,
-                // and position supplies the server's episode order.
-                episodes.reverse();
                 Ok::<_, anyhow::Error>(episodes)
             })
             .buffered(CONCURRENT_SHOWS)
@@ -734,11 +793,23 @@ impl ApiClient {
                 json!({"item_id":id,"provider_instance_id_or_domain":provider}),
                 "track",
             ),
-            Target::Podcast { id, provider } => (
-                "music/podcasts/podcast_episodes".into(),
-                json!({"item_id":id,"provider_instance_id_or_domain":provider}),
-                "podcast_episode",
-            ),
+            Target::Podcast {
+                id,
+                provider,
+                offset,
+            } => {
+                let (episodes, next) = self.podcast_episodes(id, provider, *offset).await?;
+                let items = episodes
+                    .iter()
+                    .map(|episode| Media::parse(episode, "podcast_episode"))
+                    .collect();
+                let next = next.map(|offset| Target::Podcast {
+                    id: id.clone(),
+                    provider: provider.clone(),
+                    offset,
+                });
+                return Ok((items, next));
+            }
             // Shelves are server-defined lists, not paged libraries.
             Target::InProgress => (
                 "music/in_progress_items".into(),
@@ -1035,7 +1106,16 @@ pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
                     search,
                     order,
                 },
-                Target::Library { .. } => {
+                Target::Podcast {
+                    id,
+                    provider,
+                    offset,
+                } if offset >= PAGE_SIZE => Target::Podcast {
+                    id,
+                    provider,
+                    offset: offset - PAGE_SIZE,
+                },
+                Target::Library { .. } | Target::Podcast { .. } => {
                     app.status = "Already on the first page".into();
                     return Some(Action::None);
                 }

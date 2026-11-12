@@ -902,6 +902,9 @@ fn hints(app: &App) -> &'static str {
         Focus::Music if matches!(&app.music.page.target, crate::music::Target::Library { .. }) => {
             "Enter open/play menu · P playback menu · x select track · A selected replace/add menu · a add item or choose queue · N play next · f favourite · Esc back · r reload · [/] previous/next page · o sort · Ctrl-F filter · / search · Tab change pane"
         }
+        Focus::Music if matches!(&app.music.page.target, crate::music::Target::Podcast { .. }) => {
+            "Enter open/play menu · P playback menu · x select track · A selected replace/add menu · a add item or choose queue · N play next · f favourite · Esc back · r reload · [/] previous/next page · / search · Tab change pane"
+        }
         Focus::Music => {
             "Enter open/play menu · P playback menu · x select track · A selected replace/add menu · a add item or choose queue · N play next · f favourite · Esc back · r reload · / search · Tab change pane"
         }
