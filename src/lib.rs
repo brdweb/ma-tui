@@ -14,6 +14,7 @@ pub mod music;
 pub mod presentation;
 pub mod settings;
 pub mod terminal_ui;
+pub mod text;
 pub mod theme;
 pub mod ui;
 pub mod visualizer;
