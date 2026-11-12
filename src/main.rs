@@ -136,6 +136,8 @@ async fn main() -> Result<()> {
                     let item = serde_json::json!({
                         "name": title,
                         "duration": 2712,
+                        "season": uri.contains("podcast_episode").then_some(2),
+                        "episode_number": uri.contains("podcast_episode").then_some(14),
                         "podcast": if uri.contains("podcast_episode") { Some("Fictional show") } else { None }.map(|name| serde_json::json!({ "name": name })),
                         "authors": if uri.contains("audiobook") { vec!["Fictional author"] } else { vec![] },
                         "metadata": {

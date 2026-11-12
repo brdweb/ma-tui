@@ -15,7 +15,7 @@ fn key(code: KeyCode) -> KeyEvent {
 fn episode() -> serde_json::Value {
     json!({
         "name":"Episode 14","uri":"podcast_feed://podcast_episode/14","media_type":"podcast_episode",
-        "duration":3725,"podcast":{"name":"Fixture Show"},
+        "duration":3725,"podcast":{"name":"Fixture Show"},"season":2,"episode_number":14,
         "metadata":{
             "release_date":"2026-10-30T08:00:00+00:00",
             "performers":["Host","Guest\u{1b}[2J"],
@@ -33,6 +33,7 @@ fn facts_name_only_what_the_server_gave() {
         details::facts(&episode()),
         [
             ("Show", "Fixture Show".to_owned()),
+            ("Episode", "S2 E14".into()),
             ("Published", "2026-10-30".into()),
             ("Duration", "1:02:05".into()),
             ("People", "Host, Guest [2J".into()),
@@ -199,4 +200,17 @@ fn the_pane_draws_and_scrolling_stops_at_the_end() {
         scroll > 0 && scroll < 500,
         "clamped to the content: {scroll}"
     );
+}
+
+#[test]
+fn the_episode_fact_shows_whichever_number_the_publisher_gave() {
+    let numbered = |numbers: serde_json::Value| {
+        details::facts(&numbers)
+            .into_iter()
+            .find(|(label, _)| *label == "Episode")
+            .map(|(_, value)| value)
+    };
+    assert_eq!(numbered(json!({"episode_number":3})).as_deref(), Some("E3"));
+    assert_eq!(numbered(json!({"season":4})).as_deref(), Some("S4"));
+    assert_eq!(numbered(json!({"season":null,"episode_number":0})), None);
 }
