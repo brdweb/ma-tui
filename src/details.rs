@@ -1,9 +1,20 @@
 //! Show notes and facts about a podcast, episode or audiobook.
 //!
-//! Rows are slim summaries that keep no description, so details are filled in
-//! from the full item (`music/item_by_uri`). Every value is remote text and
-//! goes through `text::plain` before it is kept.
+//! The pane replaces the browser column, like the controls menu, and takes the
+//! keys while it is open. Rows are slim summaries that keep no description, so
+//! the pane opens at once with the row's title and fills in from the full item
+//! (`music/item_by_uri`). Every value is remote text and goes through
+//! `text::plain` before it is kept.
 
+use crate::ui::{Action, App};
+use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::{
+    layout::{Constraint, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Paragraph, Wrap},
+    Frame,
+};
 use serde_json::Value;
 
 /// Longest description kept, in characters. Show notes can be long; a book's
@@ -54,6 +65,19 @@ impl Details {
         );
         self.loading = false;
         self.error.clear();
+    }
+}
+
+/// Open the pane for an item, or say why not. Returns the read to send.
+pub fn open(app: &mut App, uri: &str, title: &str, kind: &str) -> Action {
+    if !offered(kind) || uri.is_empty() {
+        app.status = "Details are shown for podcasts, episodes and audiobooks".into();
+        return Action::None;
+    }
+    app.details = Some(Details::loading(uri, title));
+    Action::LoadDetails {
+        uri: uri.into(),
+        title: title.into(),
     }
 }
 
@@ -151,4 +175,111 @@ pub fn facts(item: &Value) -> Vec<(&'static str, String)> {
         .into_iter()
         .filter(|(_, value)| !value.is_empty())
         .collect()
+}
+
+/// Keys while the pane is open: scroll, or close it.
+pub fn key(app: &mut App, key: KeyEvent) -> Action {
+    let Some(details) = &mut app.details else {
+        return Action::None;
+    };
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') | KeyCode::Backspace => {
+            app.details = None;
+        }
+        KeyCode::Down | KeyCode::Char('j') => details.scroll = details.scroll.saturating_add(1),
+        KeyCode::Up | KeyCode::Char('k') => details.scroll = details.scroll.saturating_sub(1),
+        KeyCode::PageDown | KeyCode::Char(' ') => {
+            details.scroll = details.scroll.saturating_add(10)
+        }
+        KeyCode::PageUp => details.scroll = details.scroll.saturating_sub(10),
+        KeyCode::Home => details.scroll = 0,
+        _ => {}
+    }
+    Action::None
+}
+
+/// Rows a line takes when wrapped at word boundaries, as the paragraph does.
+fn wrapped(text: &str, width: usize) -> usize {
+    let (mut rows, mut used) = (1, 0);
+    for word in text.split(' ') {
+        let length = word.chars().count();
+        if used > 0 && used + 1 + length > width {
+            rows += 1;
+            used = 0;
+        }
+        used += length + usize::from(used > 0);
+        while used > width {
+            rows += 1;
+            used -= width;
+        }
+    }
+    rows
+}
+
+/// The pane, in the browser column.
+pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
+    let palette = app.palette;
+    let Some(details) = &mut app.details else {
+        return;
+    };
+    let area = crate::ui::heading(frame, area, palette, "DETAILS", true);
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+    let dim = Style::default().fg(palette.secondary);
+    frame.render_widget(
+        Paragraph::new("↑↓ scroll · PgUp/PgDn page · Esc returns").style(dim),
+        rows[0],
+    );
+    let mut lines = vec![
+        Line::styled(
+            details.title.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::default(),
+    ];
+    for (label, value) in &details.facts {
+        lines.push(Line::from(vec![
+            Span::styled(format!("{label}: "), dim),
+            Span::raw(value.clone()),
+        ]));
+    }
+    if details.loading {
+        lines.push(Line::styled("Loading details…", dim));
+    } else if !details.error.is_empty() {
+        lines.push(Line::raw(format!(
+            "Could not load details: {}",
+            details.error
+        )));
+    } else if details.description.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::styled("No description", dim));
+    } else {
+        lines.push(Line::default());
+        lines.extend(
+            details
+                .description
+                .lines()
+                .map(|text| Line::raw(text.to_owned())),
+        );
+    }
+    // Wrapped height, so scrolling stops at the end rather than past it.
+    let width = rows[1].width.max(1) as usize;
+    let height: usize = lines
+        .iter()
+        .map(|line| {
+            let text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            wrapped(&text, width)
+        })
+        .sum();
+    let last = height.saturating_sub(rows[1].height as usize);
+    details.scroll = details.scroll.min(last.min(u16::MAX as usize) as u16);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((details.scroll, 0)),
+        rows[1],
+    );
 }

@@ -353,3 +353,35 @@ async fn the_chapter_picker_reads_the_full_item() {
     assert_eq!(lookups.load(Ordering::SeqCst), 2);
     controller.shutdown().await;
 }
+
+#[tokio::test]
+async fn the_details_pane_reads_the_full_item() {
+    let (mut controller, _) = fixture(
+        json!({"uri":"library://audiobook/4","media_type":"audiobook"}),
+        json!({"uri":"library://audiobook/4","name":"Full","metadata":{"description":"Notes"}}),
+    )
+    .await;
+    controller
+        .requests
+        .send(ma_tui::controller::Request::new(
+            None,
+            ma_tui::ui::Action::LoadDetails {
+                uri: "library://audiobook/4".into(),
+                title: "Row".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    let (uri, result) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(Update::Details { uri, result }) = controller.updates.recv().await {
+                return (uri, result);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(uri, "library://audiobook/4");
+    assert_eq!(result.unwrap()["name"], "Full");
+    controller.shutdown().await;
+}

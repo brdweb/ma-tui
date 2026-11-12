@@ -45,6 +45,11 @@ pub enum Update {
         uri: String,
         result: Result<Vec<crate::chapters::Chapter>, String>,
     },
+    /// The full item for the details pane, answering LoadDetails for `uri`.
+    Details {
+        uri: String,
+        result: Result<serde_json::Value, String>,
+    },
     Notice(String),
 }
 
@@ -227,6 +232,7 @@ impl Controller {
                                     | Action::Search(_)
                                     | Action::LoadPlaylists { .. }
                                     | Action::LoadChapters { .. }
+                                    | Action::LoadDetails { .. }
                             )
                         {
                             let _ = tx.send(Update::Notice("Command expired; press the key again".into())).await;
@@ -253,6 +259,14 @@ impl Controller {
                             playlists.replace(tokio::spawn(async move {
                                 let result = api.editable_playlists().await.map_err(|e| e.to_string());
                                 let _ = tx.send(Update::Playlists { uri, result }).await;
+                            }));
+                            continue;
+                        }
+                        if let Action::LoadDetails { uri, .. } = command.action {
+                            let (api, tx) = (api.clone(), tx.clone());
+                            playlists.replace(tokio::spawn(async move {
+                                let result = api.item(&uri).await.map_err(|e| e.to_string());
+                                let _ = tx.send(Update::Details { uri, result }).await;
                             }));
                             continue;
                         }

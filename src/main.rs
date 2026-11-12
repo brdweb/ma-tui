@@ -131,6 +131,30 @@ async fn main() -> Result<()> {
                         .cloned()
                         .collect();
                     app.status = "Demo search complete (fictional offline data)".into();
+                } else if let ui::Action::LoadDetails { uri, title } = action {
+                    // A fictional item, so the pane can be seen offline.
+                    let item = serde_json::json!({
+                        "name": title,
+                        "duration": 2712,
+                        "podcast": if uri.contains("podcast_episode") { Some("Fictional show") } else { None }.map(|name| serde_json::json!({ "name": name })),
+                        "authors": if uri.contains("audiobook") { vec!["Fictional author"] } else { vec![] },
+                        "metadata": {
+                            "release_date": "2026-11-01T06:00:00+00:00",
+                            "performers": ["Fictional host", "Fictional guest"],
+                            "links": [{"type": "website", "url": "https://example.com/episode"}],
+                            "chapters": [{"position": 1, "name": "Opening", "start": 0}],
+                            "description": "<p>A <b>fictional</b> item for the offline demo.</p>\
+                                <ul><li>No server was asked</li><li>No audio plays</li></ul>\
+                                <p>Show notes arrive as HTML &amp; are shown as plain text.</p>"
+                        }
+                    });
+                    ma_tui::presentation::apply(
+                        app,
+                        ma_tui::controller::Update::Details {
+                            uri,
+                            result: Ok(item),
+                        },
+                    );
                 } else if let ui::Action::LoadChapters { uri } = action {
                     // Fictional chapters, so the picker can be seen offline.
                     let chapters = demo_chapters(&["Opening", "Theme", "Bridge", "Coda"]);

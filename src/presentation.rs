@@ -502,6 +502,18 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                 }
             }
         }
+        // Only into the pane still open for that item.
+        Update::Details { uri, result } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == uri) {
+                match result {
+                    Ok(item) => details.fill(&item),
+                    Err(error) => {
+                        details.loading = false;
+                        details.error = error;
+                    }
+                }
+            }
+        }
         Update::Notice(text) => app.status = text,
         Update::Playlog => {
             return app.music.progress_changed(std::time::Instant::now());

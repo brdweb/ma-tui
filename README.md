@@ -155,6 +155,7 @@ playback.
 | Enter in music/search | Open a collection/folder, or open a playable item's menu |
 | P in music/search | Open the full playback menu for the highlighted item |
 | f in music/search | Toggle favourite on the highlighted item |
+| i in music/search | Details of a podcast, episode or audiobook: show notes, date, people, links; Esc closes |
 | F | Toggle favourite on the now-playing item |
 | x in music/search | Select or deselect an available, playable track |
 | A in music/search | Choose Replace queue or Add to queue for selected tracks in displayed order |

@@ -1069,6 +1069,7 @@ fn progress_can_be_marked_without_a_speaker_selected() {
             "Add to favourites",
             "Add to library",
             "Add to playlist…",
+            "Details",
         ]
     );
     assert_eq!(
