@@ -23,6 +23,12 @@ pub enum Update {
     },
     /// The cover for what is playing, or none when there is not one.
     Artwork(Option<crate::artwork::Art>),
+    /// The chapters of the item at `uri`, which may have stopped playing by
+    /// the time this arrives.
+    Chapters {
+        uri: String,
+        chapters: Vec<crate::chapters::Chapter>,
+    },
     Offline(String),
     Search(String, Result<Vec<Track>, String>),
     Browse(
@@ -67,6 +73,11 @@ struct Pending(Option<JoinHandle<()>>);
 impl Pending {
     fn replace(&mut self, task: JoinHandle<()>) {
         if let Some(previous) = self.0.replace(task) {
+            previous.abort();
+        }
+    }
+    fn cancel(&mut self) {
+        if let Some(previous) = self.0.take() {
             previous.abort();
         }
     }
@@ -141,6 +152,8 @@ impl Controller {
             // The cover only changes when the item does, so it is fetched then
             // rather than on every queue read.
             let (mut covering, mut cover) = (Pending::default(), String::new());
+            // Chapters likewise belong to the item, not to the snapshot.
+            let (mut chaptering, mut chaptered) = (Pending::default(), String::new());
             loop {
                 let mut stale = Stale::all();
                 tokio::select! {
@@ -299,8 +312,37 @@ impl Controller {
                             }));
                         }
                     }
+                    let chapters = queue
+                        .as_ref()
+                        .ok()
+                        .map(|q| crate::chapters::source(&q.details))
+                        .filter(|(uri, _)| *uri != chaptered);
                     if tx.send(Update::Queue(id, queue)).await.is_err() {
                         break;
+                    }
+                    // Sent after the snapshot naming the item, so the interface
+                    // knows which item these belong to when they arrive.
+                    if let Some((uri, source)) = chapters {
+                        chaptered = uri.clone();
+                        match source {
+                            crate::chapters::Source::Known(chapters) => {
+                                chaptering.cancel();
+                                if tx.send(Update::Chapters { uri, chapters }).await.is_err() {
+                                    break;
+                                }
+                            }
+                            crate::chapters::Source::Fetch => {
+                                let (api, tx) = (api.clone(), tx.clone());
+                                chaptering.replace(tokio::spawn(async move {
+                                    let chapters = api
+                                        .item(&uri)
+                                        .await
+                                        .map(|item| crate::chapters::parse(&item))
+                                        .unwrap_or_default();
+                                    let _ = tx.send(Update::Chapters { uri, chapters }).await;
+                                }));
+                            }
+                        }
                     }
                 }
             }

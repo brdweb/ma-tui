@@ -2,6 +2,7 @@
 pub mod api;
 pub mod artwork;
 pub mod audio;
+pub mod chapters;
 pub mod cli;
 pub mod config;
 pub mod controller;

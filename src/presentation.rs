@@ -387,6 +387,16 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
             app.artwork = art;
             app.artwork_generation = app.artwork_generation.wrapping_add(1);
         }
+        // Only for what is playing now: a fetch for an item that has since
+        // been replaced must not label the new one.
+        Update::Chapters { uri, chapters }
+            if crate::chapters::playing_uri(&app.queue_details) == uri =>
+        {
+            app.chapters = crate::chapters::Chapters {
+                uri,
+                list: chapters,
+            };
+        }
         // The server's own clock, for the queue currently on screen.
         Update::Elapsed(queue_id, seconds) if app.queue_id == queue_id => {
             app.elapsed = seconds;
