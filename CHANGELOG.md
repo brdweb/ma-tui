@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Local playback
+
+- Move the embedded Sendspin client from 0.3.7 to 0.3.8. It holds back sync
+  corrections while a freshly opened output stream's reported delay settles,
+  which stops several seconds of up-to-4% speed correction after playback
+  starts on some ALSA-over-PulseAudio/PipeWire setups, and it adds unsigned
+  24-bit output. The protocol and MA-TUI's use of the API are unchanged.
+
 ## 1.1.1 — 2026-10-09
 
 ### Music Assistant compatibility

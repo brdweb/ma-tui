@@ -4,7 +4,7 @@
 
 Rust + Ratatui Linux TUI; Music Assistant 2.10.5 is the current integration
 target. Local playback is included from the first implementation, not a later
-phase. Embed `sendspin = "=0.3.7"`; do not introduce a companion player process.
+phase. Embed `sendspin = "=0.3.8"`; do not introduce a companion player process.
 Commit Cargo.lock when changes are reviewed. MA-TUI is MIT licensed; third-party
 dependencies retain their own licenses. Release gates are in `docs/releasing.md`.
 
@@ -55,8 +55,8 @@ whose worker cannot finish within two seconds is not reopened concurrently.
 
 - MA HTTP handler: https://github.com/music-assistant/server/tree/2.10.5/music_assistant/controllers/webserver
 - MA Sendspin authentication: https://github.com/music-assistant/server/blob/2.10.5/music_assistant/controllers/webserver/sendspin_proxy.py
-- Sendspin 0.3.7: https://github.com/Sendspin/sendspin-rs/tree/v0.3.7
-- Audio output: https://github.com/Sendspin/sendspin-rs/blob/v0.3.7/src/audio/synced_player.rs
+- Sendspin 0.3.8: https://github.com/Sendspin/sendspin-rs/tree/v0.3.8
+- Audio output: https://github.com/Sendspin/sendspin-rs/blob/v0.3.8/src/audio/synced_player.rs
 - Desktop integration reference (not a dependency): https://github.com/music-assistant/desktop-app/blob/main/src-tauri/src/sendspin/mod.rs
 
 MA proxy authentication is separate from the ordinary Sendspin handshake: send
@@ -127,8 +127,8 @@ Verified against local WebSocket fixtures only. Fixture success does not
 establish live compatibility; the handshake, event names and payload shapes need
 confirming against an actual 2.10.2 server with explicit authorization.
 
-Sendspin 0.3.7's protocol router has unbounded internal receivers and SyncedPlayer
-callbacks use locks. Application-level channel bounds do not fix those upstream
+Sendspin 0.3.8's protocol router (unchanged since 0.3.7) has unbounded internal
+receivers and SyncedPlayer callbacks use locks. Application-level channel bounds do not fix those upstream
 properties. Split inbound receivers lack ordering IDs, so drain/discard pending
 audio on stream boundaries rather than decoding stale bytes in a new format.
 Do not enable upstream payload tracing where it might disclose protocol data.

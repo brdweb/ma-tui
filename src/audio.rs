@@ -5,7 +5,7 @@
 //! controllers/webserver/sendspin_proxy.py (`auth` then `auth_ok`).
 //!
 //! App-owned handoffs are bounded and never wait for the output thread. The
-//! pinned Sendspin 0.3.7 router itself uses unbounded receivers, and SyncedPlayer
+//! pinned Sendspin 0.3.8 router itself uses unbounded receivers, and SyncedPlayer
 //! takes internal queue locks in its callback: this is not a hard-real-time or
 //! globally lock-free guarantee. Its split receivers also lack stream sequence
 //! IDs, so boundary handling deliberately discards queued audio for safety.
@@ -905,7 +905,7 @@ async fn session(
     session_status(state, "connected", "Authenticated audio player connected");
     let mut stream_config: Option<StreamPlayerConfig> = None;
     loop {
-        // Sendspin 0.3.7 exposes unbounded internal receivers. Drain promptly,
+        // Sendspin 0.3.8 exposes unbounded internal receivers. Drain promptly,
         // cap observed backlog and never await the bounded audio worker queue.
         if connection.audio.len() > MAX_WORK_ITEMS || connection.messages.len() > 64 {
             bail!("Audio receive queue overflow");
@@ -1185,7 +1185,7 @@ impl DeviceOutput {
                 .default_output_device()
                 .ok_or_else(|| anyhow::anyhow!("No default audio output device"))?
         };
-        // 0.3.7 builds using the default output sample type, overriding only
+        // 0.3.8 builds using the default output sample type, overriding only
         // channels and rate. Advertise ranges supporting exactly that type.
         let sample_type = device
             .default_output_config()

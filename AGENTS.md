@@ -6,7 +6,7 @@ Personal or machine-specific notes never go in tracked files. Claude Code auto-l
 
 ## Project
 
-MA-TUI (`ma-tui`, v1.1.1, MIT) is a Linux terminal controller and local player for Music Assistant 2.10.5. It is one Rust 2021 binary: Ratatui and crossterm draw the interface, Tokio runs async work, reqwest (rustls) and tokio-tungstenite call the Music Assistant HTTP API and `/ws` event stream, embedded `sendspin = "=0.3.7"` and CPAL play audio locally, and zbus 6 exposes MPRIS. There is no companion player process and nothing is deployed as a service.
+MA-TUI (`ma-tui`, v1.1.1, MIT) is a Linux terminal controller and local player for Music Assistant 2.10.5. It is one Rust 2021 binary: Ratatui and crossterm draw the interface, Tokio runs async work, reqwest (rustls) and tokio-tungstenite call the Music Assistant HTTP API and `/ws` event stream, embedded `sendspin = "=0.3.8"` and CPAL play audio locally, and zbus 6 exposes MPRIS. There is no companion player process and nothing is deployed as a service.
 
 - `src/` — library and binary (`api`, `audio`, `controller`, `events`, `mpris`, `terminal_ui`, `ui`, and the modules beside them).
 - `tests/` — Rust tests, Python PTY smokes, and `tests/packaging_build_input.py`.
