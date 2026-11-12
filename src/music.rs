@@ -682,9 +682,11 @@ impl ApiClient {
     /// which a paging server also honours) and paged here, so a long show is
     /// never cut short at the server's default page size.
     ///
-    /// `unplayed` leaves out an older server's finished episodes before the
-    /// page is cut, so a show whose newest hundred are all played still has
-    /// its older unplayed episodes found.
+    /// `unplayed` leaves out finished episodes before the page is cut: a paging
+    /// server does it itself (`fully_played: false`, which also keeps those
+    /// with unknown progress), and an older server's full list is filtered
+    /// here, so a show whose newest hundred are all played still has its
+    /// older unplayed episodes found.
     async fn podcast_episodes(
         &self,
         id: &str,
@@ -694,15 +696,16 @@ impl ApiClient {
     ) -> Result<(Vec<Value>, Option<usize>)> {
         let paged = self.schema_at_least(PAGED_EPISODES_SCHEMA);
         let (limit, from) = if paged { (PAGE_SIZE, offset) } else { (0, 0) };
+        let mut args = json!({
+            "item_id":id,"provider_instance_id_or_domain":provider,
+            "sort_field":"position","sort_direction":"desc",
+            "limit":limit,"offset":from,
+        });
+        if paged && unplayed {
+            args["fully_played"] = json!(false);
+        }
         let listing = self
-            .command(
-                "music/podcasts/podcast_episodes",
-                json!({
-                    "item_id":id,"provider_instance_id_or_domain":provider,
-                    "sort_field":"position","sort_direction":"desc",
-                    "limit":limit,"offset":from,
-                }),
-            )
+            .command("music/podcasts/podcast_episodes", args)
             .await?;
         let mut episodes = listing
             .as_array()
@@ -726,11 +729,13 @@ impl ApiClient {
 impl ApiClient {
     /// Every unfinished episode across every show, newest first within each.
     ///
-    /// MA 2.10.5 has no server-side filter for this: `library_items` takes
-    /// `played_only`, which selects the opposite, and there is no unplayed
-    /// equivalent. So the shows are listed and then each is asked for its
-    /// episodes and filtered here. That is one request per subscription, which
-    /// is why it is bounded and overlapped rather than issued in a loop.
+    /// There is no request for this across shows, so the shows are listed and
+    /// then each is asked for its episodes: one request per subscription,
+    /// which is why it is bounded and overlapped rather than issued in a loop.
+    /// From 2.11.0b6 each show filters its own finished episodes
+    /// (`fully_played: false`), so its newest unplayed page arrives even when
+    /// the newest hundred are all played. On 2.10.x each show's episodes are
+    /// filtered here.
     async fn unplayed_episodes(&self) -> Result<(Vec<Media>, Option<Target>)> {
         use futures_util::StreamExt;
         let shows = self
@@ -755,6 +760,7 @@ impl ApiClient {
             .map(|(id, provider)| async move {
                 // Within a show the newest episode is the one to reach for.
                 // Its first page is plenty: the whole list is capped anyway.
+                // Finished episodes are left out before the page is cut.
                 let (episodes, _) = self.podcast_episodes(&id, &provider, 0, true).await?;
                 let episodes: Vec<Media> = episodes
                     .iter()

@@ -299,8 +299,10 @@ has been tested.
 
 State arrives on Music Assistant's event stream, with polling as a fallback; very
 large queues still cost extra requests when their contents change, and the
-unplayed-podcast list costs one request per subscribed show because the server has
-no filter for it. Output-device changes restart the connection, and runtime
+unplayed-podcast list costs one request per subscribed show, because there is
+no request for it across shows. Music Assistant 2.11 filters each show's
+finished episodes itself; on 2.10.x each show's whole episode list is read and
+filtered here. Output-device changes restart the connection, and runtime
 volume/mute/delay changes are not persisted across restarts.
 
 Album art needs a terminal that draws sixel to look sharp — foot does, Alacritty
