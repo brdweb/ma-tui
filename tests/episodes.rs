@@ -178,3 +178,22 @@ async fn unplayed_episodes_read_newest_first_on_both_generations() {
         );
     }
 }
+
+/// Every newest episode played, older ones not: on a server that returns the
+/// whole show, finished episodes are dropped before the first page is cut.
+#[tokio::test]
+async fn older_unplayed_episodes_are_found_past_the_first_page() {
+    let episodes: Vec<Value> = show(150)
+        .into_iter()
+        .map(|mut episode| {
+            let position = episode["position"].as_u64().unwrap();
+            episode["fully_played"] = json!(position > 30);
+            episode
+        })
+        .collect();
+    let (url, _) = server(None, episodes).await;
+    let api = ApiClient::new(&url, "fixture-token").unwrap();
+    let (items, _) = api.browse(&Target::UnplayedEpisodes).await.unwrap();
+    assert_eq!(items.len(), 30);
+    assert_eq!(items[0].title, "Episode 30");
+}
