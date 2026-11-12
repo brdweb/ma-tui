@@ -195,6 +195,17 @@ pub fn translate(value: &serde_json::Value) -> Option<Event> {
                 item: Some(item),
             })
         }
+        // 2.11: one user's favourite changed, sent only to that user's
+        // connection. `favorite` is true for a like, false for a dislike and
+        // null when cleared; only a like is a favourite here. It is applied
+        // like a library item event that carries nothing but that state.
+        "favorite_updated" => {
+            let favorite = value.get("data")?.get("favorite")? == true;
+            Some(Event::MediaItem {
+                uri: object()?,
+                item: Some(serde_json::json!({ "favorite": favorite })),
+            })
+        }
         "media_item_deleted" => Some(Event::MediaItem {
             uri: object()?,
             item: None,
