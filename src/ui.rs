@@ -77,6 +77,16 @@ pub enum Action {
         name: String,
         uri: Option<String>,
     },
+    /// Read an audiobook's chapters, for the chapter picker.
+    LoadChapters {
+        uri: String,
+    },
+    /// Replace the queue with an audiobook, starting at the chapter the
+    /// server numbers `chapter`.
+    PlayChapter {
+        uri: String,
+        chapter: u64,
+    },
 }
 
 impl Action {
@@ -91,6 +101,7 @@ impl Action {
                 | Action::LoadPlaylists { .. }
                 | Action::AddToPlaylist { .. }
                 | Action::CreatePlaylist { .. }
+                | Action::LoadChapters { .. }
         )
     }
 }

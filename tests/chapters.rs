@@ -318,3 +318,38 @@ async fn a_track_costs_no_lookup() {
     assert_eq!(lookups.load(Ordering::SeqCst), 0);
     controller.shutdown().await;
 }
+
+#[tokio::test]
+async fn the_chapter_picker_reads_the_full_item() {
+    let (mut controller, lookups) = fixture(
+        json!({"uri":"library://audiobook/3","media_type":"audiobook"}),
+        json!({"uri":"library://audiobook/3","media_type":"audiobook",
+               "metadata":{"chapters":[{"position":1,"name":"One","start":0}]}}),
+    )
+    .await;
+    // Let the playing item's own lookup happen first.
+    next_chapters(&mut controller).await;
+    controller
+        .requests
+        .send(ma_tui::controller::Request::new(
+            None,
+            ma_tui::ui::Action::LoadChapters {
+                uri: "library://audiobook/3".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    let (uri, result) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(Update::ChapterList { uri, result }) = controller.updates.recv().await {
+                return (uri, result);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(uri, "library://audiobook/3");
+    assert_eq!(result.unwrap(), vec![chapter(1, "One", 0.0, None)]);
+    assert_eq!(lookups.load(Ordering::SeqCst), 2);
+    controller.shutdown().await;
+}

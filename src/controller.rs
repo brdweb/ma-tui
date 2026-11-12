@@ -40,6 +40,11 @@ pub enum Update {
         uri: String,
         result: Result<Vec<crate::music::Media>, String>,
     },
+    /// An audiobook's chapters for the picker, answering LoadChapters for `uri`.
+    ChapterList {
+        uri: String,
+        result: Result<Vec<crate::chapters::Chapter>, String>,
+    },
     Notice(String),
 }
 
@@ -221,6 +226,7 @@ impl Controller {
                                 Action::Browse { .. }
                                     | Action::Search(_)
                                     | Action::LoadPlaylists { .. }
+                                    | Action::LoadChapters { .. }
                             )
                         {
                             let _ = tx.send(Update::Notice("Command expired; press the key again".into())).await;
@@ -247,6 +253,18 @@ impl Controller {
                             playlists.replace(tokio::spawn(async move {
                                 let result = api.editable_playlists().await.map_err(|e| e.to_string());
                                 let _ = tx.send(Update::Playlists { uri, result }).await;
+                            }));
+                            continue;
+                        }
+                        if let Action::LoadChapters { uri } = command.action {
+                            let (api, tx) = (api.clone(), tx.clone());
+                            playlists.replace(tokio::spawn(async move {
+                                let result = api
+                                    .item(&uri)
+                                    .await
+                                    .map(|item| crate::chapters::parse(&item))
+                                    .map_err(|e| e.to_string());
+                                let _ = tx.send(Update::ChapterList { uri, result }).await;
                             }));
                             continue;
                         }
@@ -417,6 +435,9 @@ async fn execute(api: &ApiClient, request: Request) -> anyhow::Result<Option<&'s
                     api.enqueue_uris(&player, &uris).await?;
                 }
                 Action::PlayNext(uri) => api.play_next_uri(&player, &uri).await?,
+                Action::PlayChapter { uri, chapter } => {
+                    api.play_chapter(&player, &uri, chapter).await?
+                }
                 Action::StartRadio(uri) => {
                     api.start_radio(&player, &uri).await?;
                     return Ok(Some("Radio started"));
