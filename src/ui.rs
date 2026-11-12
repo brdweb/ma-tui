@@ -127,6 +127,44 @@ impl App {
         Action::Seek(self.elapsed)
     }
 
+    /// Move to the previous or next chapter of the playing item, from the
+    /// position on screen, through the same seek as the arrow keys.
+    fn chapter(&mut self, forward: bool) -> Action {
+        let chapters = self.chapters.current(&self.queue_details);
+        if chapters.is_empty() {
+            self.status = "This item has no chapters".into();
+            return Action::None;
+        }
+        let target = if forward {
+            crate::chapters::next(chapters, self.elapsed)
+        } else {
+            crate::chapters::previous(chapters, self.elapsed)
+        };
+        match target {
+            Some(position) => self.seek_to(position),
+            None => {
+                self.status = "Already in the last chapter".into();
+                Action::None
+            }
+        }
+    }
+
+    /// Seek to an absolute position, shown at once and corrected by the next
+    /// snapshot.
+    pub fn seek_to(&mut self, position: f64) -> Action {
+        if !position.is_finite() {
+            return Action::None;
+        }
+        let position = if self.duration.is_finite() && self.duration > 0.0 {
+            position.clamp(0.0, self.duration)
+        } else {
+            position.max(0.0)
+        };
+        self.elapsed = position;
+        self.elapsed_at = Some(std::time::Instant::now());
+        Action::Seek(position)
+    }
+
     /// Whether the selected speaker reports that it is playing.
     fn playing(&self) -> bool {
         self.players.iter().any(|p| {
@@ -485,6 +523,8 @@ impl App {
             KeyCode::Char(' ') | KeyCode::Char('p') => Action::Toggle,
             KeyCode::Char('n') | KeyCode::Char('>') | KeyCode::Char('.') => Action::Next,
             KeyCode::Char('<') | KeyCode::Char(',') => Action::Previous,
+            KeyCode::Char('(') => self.chapter(false),
+            KeyCode::Char(')') => self.chapter(true),
             KeyCode::Char('s') => Action::Command(crate::controls::Command::Player {
                 name: "stop",
                 args: serde_json::json!({}),
@@ -916,13 +956,19 @@ fn hints(app: &App) -> &'static str {
 }
 
 const TRANSPORT_HINTS: &str = "Space/p pause/resume · </> previous/next · s stop · +/- volume · m mute · z shuffle · l repeat · ? controls";
+/// The same keys while the playing item has chapters to move between.
+const CHAPTER_HINTS: &str = "Space/p pause/resume · </> previous/next · (/) chapter · s stop · +/- volume · m mute · z shuffle · l repeat · ? controls";
 
 /// Wrap only between labels: splitting a shortcut from its operation leaves
 /// the exact orphan abbreviations these hints are meant to replace.
 fn hint_rows(app: &App, width: usize, max_rows: usize) -> Vec<String> {
     let mut rows = Vec::new();
     let transport = if app.menu.is_none() && !app.music.filtering && !app.editing {
-        TRANSPORT_HINTS
+        if app.chapters.current(&app.queue_details).is_empty() {
+            TRANSPORT_HINTS
+        } else {
+            CHAPTER_HINTS
+        }
     } else {
         ""
     };
@@ -1083,8 +1129,33 @@ fn draw_now_playing(frame: &mut Frame, app: &mut App, area: Rect, strip: u16) {
         rows[1],
     );
 
-    let second = Layout::horizontal([Constraint::Min(10), Constraint::Length(16)]).split(rows[2]);
+    // The chapter sits beside the byline, taking at most half of its room.
+    let chapter = crate::chapters::label(app.chapters.current(&app.queue_details), app.elapsed)
+        .unwrap_or_default();
+    let chapter_width = (chapter.chars().count() as u16)
+        .saturating_add(2)
+        .min(rows[2].width.saturating_sub(16) / 2);
+    let room = chapter_width.saturating_sub(2) as usize;
+    let chapter = if chapter.chars().count() > room {
+        let mut cut: String = chapter.chars().take(room.saturating_sub(1)).collect();
+        cut.push('…');
+        cut
+    } else {
+        chapter
+    };
+    let second = Layout::horizontal([
+        Constraint::Min(10),
+        Constraint::Length(if chapter.is_empty() { 0 } else { chapter_width }),
+        Constraint::Length(16),
+    ])
+    .split(rows[2]);
     frame.render_widget(Paragraph::new(app.artist.clone()).style(dim), second[0]);
+    frame.render_widget(
+        Paragraph::new(chapter)
+            .style(Style::default().fg(palette.accent))
+            .alignment(ratatui::layout::Alignment::Right),
+        second[1],
+    );
     frame.render_widget(
         Paragraph::new(format!(
             "{} / {}",
@@ -1093,7 +1164,7 @@ fn draw_now_playing(frame: &mut Frame, app: &mut App, area: Rect, strip: u16) {
         ))
         .style(dim)
         .alignment(ratatui::layout::Alignment::Right),
-        second[1],
+        second[2],
     );
 
     if strip > 0 {

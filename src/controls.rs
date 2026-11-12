@@ -116,10 +116,11 @@ pub struct Entry {
 }
 
 /// Headings in the order they are shown; entries keep their order within one.
-const SECTIONS: [&str; 10] = [
-    PLAYBACK, VOLUME, QUEUE, GROUPING, SOURCES, OPTIONS, SLEEP, MEDIA, PLAYLISTS, NEW,
+const SECTIONS: [&str; 11] = [
+    PLAYBACK, CHAPTERS, VOLUME, QUEUE, GROUPING, SOURCES, OPTIONS, SLEEP, MEDIA, PLAYLISTS, NEW,
 ];
 const PLAYBACK: &str = "Playback";
+const CHAPTERS: &str = "Chapters";
 const VOLUME: &str = "Volume";
 const QUEUE: &str = "Queue";
 const GROUPING: &str = "Grouping";
@@ -238,6 +239,29 @@ impl Menu {
             ("Previous track", "previous"),
         ] {
             menu.player_command(PLAYBACK, label.into(), name, json!({}));
+        }
+        let chapters = app.chapters.current(&app.queue_details);
+        let playing = crate::chapters::index_at(chapters, app.elapsed);
+        for (index, chapter) in chapters.iter().enumerate() {
+            let name = if chapter.name.is_empty() {
+                format!("Chapter {}", index + 1)
+            } else {
+                chapter.name.clone()
+            };
+            let marker = if playing == Some(index) {
+                " · playing"
+            } else {
+                ""
+            };
+            menu.add(
+                CHAPTERS,
+                format!(
+                    "{}. {} · {name}{marker}",
+                    index + 1,
+                    crate::ui::duration(chapter.start)
+                ),
+                Action::Seek(crate::chapters::seek_point(chapter)),
+            );
         }
         if let Some(powered) = p["powered"].as_bool() {
             menu.player_command(
@@ -771,6 +795,10 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
                 return Action::None;
             }
             app.menu = None;
+            // Show the new position at once, as the seek keys do.
+            if let Action::Seek(position) = action {
+                return app.seek_to(position);
+            }
             return action;
         }
         _ => {}

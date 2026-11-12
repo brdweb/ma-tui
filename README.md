@@ -149,6 +149,7 @@ playback.
 | z / l | Toggle shuffle / cycle repeat off→all→one |
 | + / - | Volume up/down (the server chooses the step) |
 | Left / Right | Seek backward/forward 10 seconds |
+| ( / ) | Previous / next chapter of the playing audiobook or episode; ( restarts the current chapter after its first few seconds |
 | / | Search; Enter submits, Esc cancels |
 | b / F3 | Open music browser |
 | Enter in music/search | Open a collection/folder, or open a playable item's menu |
@@ -195,7 +196,7 @@ With Queue focused, **c** clears its current queue and stops playback. This
 requires an active queue; it never guesses an empty queue ID.
 
 The controls menu covers transport and external sources, mute, power,
-individual/group volume, absolute seek, sleep timers, grouping, sound modes,
+individual/group volume, absolute seek, the playing item's chapters, sleep timers, grouping, sound modes,
 writable player options, queue shuffle/repeat, autoplay/crossfade,
 play/remove/reorder/clear, **Save queue as playlist…**, playback transfer,
 audiobook/podcast speed, and media URIs. Entries are grouped under headings and
