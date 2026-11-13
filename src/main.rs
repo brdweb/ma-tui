@@ -44,6 +44,21 @@ fn dispatch(
     }
 }
 
+/// Fictional chapters at fixed starts, for the offline demo.
+fn demo_chapters(names: &[&str]) -> Vec<ma_tui::chapters::Chapter> {
+    names
+        .iter()
+        .zip([0.0, 45.0, 120.0, 200.0])
+        .enumerate()
+        .map(|(index, (name, start))| ma_tui::chapters::Chapter {
+            position: Some(index as u64 + 1),
+            name: (*name).into(),
+            start,
+            end: None,
+        })
+        .collect()
+}
+
 fn demo() -> App {
     App {
         demo: true,
@@ -73,21 +88,7 @@ fn demo() -> App {
         }}}),
         chapters: ma_tui::chapters::Chapters {
             uri: "demo://track/sample".into(),
-            list: [
-                ("Opening", 0.0),
-                ("Theme", 45.0),
-                ("Bridge", 120.0),
-                ("Coda", 200.0),
-            ]
-            .into_iter()
-            .enumerate()
-            .map(|(index, (name, start))| ma_tui::chapters::Chapter {
-                position: Some(index as u64 + 1),
-                name: name.into(),
-                start,
-                end: None,
-            })
-            .collect(),
+            list: demo_chapters(&["Opening", "Theme", "Bridge", "Coda"]),
         },
         elapsed: 72.0,
         duration: 240.0,
@@ -130,6 +131,16 @@ async fn main() -> Result<()> {
                         .cloned()
                         .collect();
                     app.status = "Demo search complete (fictional offline data)".into();
+                } else if let ui::Action::LoadChapters { uri } = action {
+                    // Fictional chapters, so the picker can be seen offline.
+                    let chapters = demo_chapters(&["Opening", "Theme", "Bridge", "Coda"]);
+                    ma_tui::presentation::apply(
+                        app,
+                        ma_tui::controller::Update::ChapterList {
+                            uri,
+                            result: Ok(chapters),
+                        },
+                    );
                 } else if let ui::Action::Browse { generation, target } = action {
                     app.music
                         .apply(generation, Ok((ma_tui::music::demo_listing(&target), None)));

@@ -319,6 +319,41 @@ async fn a_track_costs_no_lookup() {
     controller.shutdown().await;
 }
 
+#[tokio::test]
+async fn the_chapter_picker_reads_the_full_item() {
+    let (mut controller, lookups) = fixture(
+        json!({"uri":"library://audiobook/3","media_type":"audiobook"}),
+        json!({"uri":"library://audiobook/3","media_type":"audiobook",
+               "metadata":{"chapters":[{"position":1,"name":"One","start":0}]}}),
+    )
+    .await;
+    // Let the playing item's own lookup happen first.
+    next_chapters(&mut controller).await;
+    controller
+        .requests
+        .send(ma_tui::controller::Request::new(
+            None,
+            ma_tui::ui::Action::LoadChapters {
+                uri: "library://audiobook/3".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    let (uri, result) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(Update::ChapterList { uri, result }) = controller.updates.recv().await {
+                return (uri, result);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(uri, "library://audiobook/3");
+    assert_eq!(result.unwrap(), vec![chapter(1, "One", 0.0, None)]);
+    assert_eq!(lookups.load(Ordering::SeqCst), 2);
+    controller.shutdown().await;
+}
+
 #[test]
 fn a_fetch_landing_while_the_queue_is_unknown_is_kept_for_that_item() {
     // The queue read failed (or was cleared) while the fetch was out. The

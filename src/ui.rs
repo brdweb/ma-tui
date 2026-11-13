@@ -77,6 +77,16 @@ pub enum Action {
         name: String,
         uri: Option<String>,
     },
+    /// Read an audiobook's chapters, for the chapter picker.
+    LoadChapters {
+        uri: String,
+    },
+    /// Replace the queue with an audiobook, starting at the chapter the
+    /// server numbers `chapter`.
+    PlayChapter {
+        uri: String,
+        chapter: u64,
+    },
 }
 
 impl Action {
@@ -91,6 +101,7 @@ impl Action {
                 | Action::LoadPlaylists { .. }
                 | Action::AddToPlaylist { .. }
                 | Action::CreatePlaylist { .. }
+                | Action::LoadChapters { .. }
         )
     }
 }
@@ -728,6 +739,9 @@ pub struct App {
     /// Chapters of the playing item, named by its URI. Read them through
     /// `Chapters::current`, which hides a list loaded for another item.
     pub chapters: crate::chapters::Chapters,
+    /// The audiobook whose chapter picker was asked for and has not arrived,
+    /// so a slow answer opens only for that request.
+    pub chapter_picker: Option<String>,
     /// Draw covers as sixel rather than half blocks.
     pub sixel: bool,
     /// Where the cover was laid out this frame, for a renderer that has to
@@ -780,6 +794,7 @@ impl Default for App {
             artwork: None,
             artwork_generation: 0,
             chapters: crate::chapters::Chapters::default(),
+            chapter_picker: None,
             sixel: false,
             artwork_area: None,
             spectrum_style: crate::config::Spectrum::default(),

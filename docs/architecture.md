@@ -276,9 +276,9 @@ state. Both are null when the provider does not report progress, which is not
 the same as "not played": nothing is shown then rather than claiming unplayed.
 
 A podcast opens into `music/podcasts/podcast_episodes`. An audiobook does not
-open into a chapter listing: 2.10.2 exposes only `audiobook_versions` beyond
-the base media APIs. Chapter bookmarks can exist in metadata, but this browser
-treats an audiobook as one playable item with a resume point.
+open into a listing: it is one playable item with a resume point, and its
+chapters come from the full item (see Chapters below). Its item menu offers
+**Chapters…** to start at one.
 
 There is no server-side filter for unplayed episodes: `library_items` takes
 `played_only`, which selects the opposite, and has no unplayed equivalent. The
@@ -339,9 +339,20 @@ can land in the chapter before. `(` restarts the current chapter after its
 first three seconds and otherwise goes to the one before. The controls menu
 lists every chapter as a seek under its own heading after Playback.
 
+**Chapters…** in an audiobook's item menu reads the full item through the
+playlist picker's slot (one picker read at a time, the newer cancelling the
+older) and lists the numbered chapters. Choosing one sends
+`player_queues/play_media` with `option: "replace"` and `start_item` set to the
+chapter's `position` as a string: `get_audiobook_resume_point` matches
+`int(start_item)` against `chapter.position` and starts at its `start`. The
+`start_item` docstring also mentions episodes, but in 2.10.9 the
+`PODCAST_EPISODE` branch of `_resolve_media_items` never passes `start_item`
+on, so episodes get no picker. Play-then-seek was not used, because it races
+the stream start.
+
 Sources: `music_assistant_models/media_items/metadata.py` (`MediaItemChapter`),
-`controllers/music/media/audiobooks.py` and the podcast providers at server
-tags 2.10.5 and 2.10.9.
+`controllers/music/media/audiobooks.py`, the podcast providers and
+`controllers/player_queues/media_resolver.py` at server tags 2.10.5 and 2.10.9.
 
 ## Player-first layout (2026-09-16)
 

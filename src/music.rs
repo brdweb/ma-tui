@@ -43,8 +43,8 @@ pub enum Target {
         id: String,
         provider: String,
     },
-    /// A podcast's episodes. MA 2.10.5 has no separate audiobook chapter-list
-    /// API, so this browser treats a book as one playable item with a resume point.
+    /// A podcast's episodes. An audiobook is not a folder: it is one playable
+    /// item, and its chapters come from the full item (`crate::chapters`).
     Podcast {
         id: String,
         provider: String,
@@ -850,6 +850,16 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
                 action,
             }),
         );
+        // Only a book: MA 2.10.9 ignores a chapter `start_item` for an episode.
+        if media.kind == "audiobook" && !media.uri.is_empty() {
+            entries.push(crate::controls::Entry {
+                section: "Play this item",
+                label: "Chapters…".into(),
+                action: Action::LoadChapters {
+                    uri: media.uri.clone(),
+                },
+            });
+        }
         if matches!(
             media.kind.as_str(),
             "track" | "album" | "artist" | "playlist"
