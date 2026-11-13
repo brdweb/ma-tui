@@ -932,6 +932,7 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
         error: String::new(),
         filter: String::new(),
         filtering: false,
+        item: String::new(),
     });
     Action::None
 }
@@ -975,6 +976,7 @@ pub(crate) fn queue_choices(app: &mut App, title: &str, replace: Action, add: Ac
         error: String::new(),
         filter: String::new(),
         filtering: false,
+        item: String::new(),
     });
     Action::None
 }

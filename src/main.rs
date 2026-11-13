@@ -66,6 +66,29 @@ fn demo() -> App {
             duration: 240.0,
             ..Default::default()
         }],
+        // Fictional chapters, so chapter display and navigation can be seen
+        // without a server.
+        queue_details: serde_json::json!({"current_item":{"media_item":{
+            "uri":"demo://track/sample","media_type":"track","name":"Sample track"
+        }}}),
+        chapters: ma_tui::chapters::Chapters {
+            uri: "demo://track/sample".into(),
+            list: [
+                ("Opening", 0.0),
+                ("Theme", 45.0),
+                ("Bridge", 120.0),
+                ("Coda", 200.0),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, start))| ma_tui::chapters::Chapter {
+                position: Some(index as u64 + 1),
+                name: name.into(),
+                start,
+                end: None,
+            })
+            .collect(),
+        },
         elapsed: 72.0,
         duration: 240.0,
         ..App::default()

@@ -208,7 +208,8 @@ search on the right, so adding music never hides the queue. Chrome is eleven
 rows — two header, four now playing, three status, two hints — and the now
 playing block carries transport state, volume, mute and the queue's
 shuffle/repeat rather than leaving them to other panes. The hint lines are the
-focused pane's keys plus a fixed transport line kept under 102 columns.
+focused pane's keys plus a transport line, which wraps between labels and
+names `(`/`)` only while the playing item has chapters.
 
 `p` is play/pause, matching other players, with previous/next on `<`/`>` (`,`
 and `.` as unshifted aliases) and `n` retained for next. Following the
@@ -327,6 +328,16 @@ URI is still the one playing, so a slow fetch for the previous item can never
 label the next. Names are untrusted: control characters are stripped and the
 length capped. A chapter without a finite, non-negative start is dropped, the
 rest sorted by start, and no usable chapters simply means none.
+
+The current chapter is derived from the displayed elapsed time, so it follows
+the same carried-forward position as the progress bar, and is shown beside the
+byline as `Ch 3/12 · Name`. `(` and `)` resolve to the existing absolute
+`Action::Seek`, so MPRIS, the optimistic position update and the queue-ownership
+checks are unchanged. A chapter is sought at its start rounded up to the next
+whole second, because `player_queues/seek` takes an integer and rounding down
+can land in the chapter before. `(` restarts the current chapter after its
+first three seconds and otherwise goes to the one before. The controls menu
+lists every chapter as a seek under its own heading after Playback.
 
 Sources: `music_assistant_models/media_items/metadata.py` (`MediaItemChapter`),
 `controllers/music/media/audiobooks.py` and the podcast providers at server
