@@ -69,10 +69,15 @@ fn cues(value: &Value) -> (String, bool) {
         let (text, shortened) =
             crate::text::plain_cut(cue["text"].as_str().unwrap_or_default(), LIMIT);
         let text = text.replace('\n', " ");
-        cut |= shortened;
         if text.is_empty() {
             continue;
         }
+        // The limit is already full, and this cue would be left out.
+        if length >= LIMIT {
+            cut = true;
+            break;
+        }
+        cut |= shortened;
         let speaker =
             crate::text::plain(cue["speaker"].as_str().unwrap_or_default(), 80).replace('\n', " ");
         let line = if speaker.is_empty() {
@@ -80,12 +85,9 @@ fn cues(value: &Value) -> (String, bool) {
         } else {
             format!("{speaker}: {text}")
         };
-        length += line.chars().count() + 1;
+        // Only the separators `join` will emit count.
+        length += line.chars().count() + usize::from(!lines.is_empty());
         lines.push(line);
-        // Enough to fill the limit; the rest would be cut anyway.
-        if length > LIMIT {
-            break;
-        }
     }
     (lines.join("\n"), cut)
 }
