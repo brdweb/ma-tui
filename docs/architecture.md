@@ -432,8 +432,17 @@ second `t` retries. The text is preferred and goes through `text::plain`.
 Without it, each cue is cleaned on its own and becomes a line, prefixed with
 the speaker when the source names one, so markup in one cue cannot flatten the
 line breaks. The result is capped at 120,000 characters (an hour of speech is
-about 50,000), and the pane says when it was cut. Following the playback
-position through the cues is a separate step.
+about 50,000), and the pane says when it was cut.
+
+When the transcript has timed cues and its episode is the queue's current
+item, the pane shows the cues instead of the text and follows playback: the
+cue being spoken (the last one started, unless its own end has passed) is
+marked and kept a third of the way down, and a fixed row above names its
+speaker. The position is the player's own estimate, carried forward between
+snapshots, so no extra request is made. Scrolling by hand stops following, so
+the reader keeps their place; End resumes it. Cues are cleaned and capped like
+the text (at most 20,000, within the same character limit), cues with no
+usable start or no text are dropped, and an end before its start is ignored.
 
 Sources: `controllers/music/media/podcasts.py` at server tag 2.11.0b8, and
 `media_items/metadata.py` (`MediaItemTranscriptCue`, `has_transcript`) in

@@ -276,3 +276,52 @@ fn wide_characters_wrap_whole_at_odd_widths() {
     assert_eq!(details::wrapped("one two three", 7), 2);
     assert_eq!(details::wrapped("", 10), 1);
 }
+
+/// Rows the paragraph really gives `text` at `width`: where a marker line
+/// placed after it lands.
+fn rendered_rows(text: &str, width: u16) -> usize {
+    use ratatui::{
+        text::Line,
+        widgets::{Paragraph, Wrap},
+    };
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 200)).unwrap();
+    terminal
+        .draw(|frame| {
+            frame.render_widget(
+                Paragraph::new(vec![Line::raw(text.to_owned()), Line::raw("§")])
+                    .wrap(Wrap { trim: false }),
+                frame.area(),
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer();
+    buffer
+        .content
+        .iter()
+        .position(|cell| cell.symbol() == "§")
+        .expect("the marker is drawn")
+        / width as usize
+}
+
+#[test]
+fn indented_lines_count_their_indent() {
+    // Inactive transcript cues start with two spaces. A cue that fills a row
+    // without them wraps once they are added.
+    for (text, width) in [
+        ("  aaaa bbbb", 11),
+        ("  aaaa bbbbb", 11),
+        ("  Host: one two three four", 26),
+        ("  Host: one two three four", 25),
+        ("  Host: one two three four", 24),
+        ("  word", 4),
+        ("▶ Guest: some words here", 24),
+        ("  長長長長", 10),
+    ] {
+        assert_eq!(
+            details::wrapped(text, width as usize),
+            rendered_rows(text, width),
+            "{text:?} at {width}"
+        );
+    }
+}
