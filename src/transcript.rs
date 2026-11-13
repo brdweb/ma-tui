@@ -33,7 +33,11 @@ impl Transcript {
         // read a decoded `<` as markup and flatten them.
         let (body, truncated) = match text {
             Some(text) => crate::text::plain_cut(text, LIMIT),
-            None => cap(cues(&value[1])),
+            None => {
+                let (joined, cut) = cues(&value[1]);
+                let (body, capped) = cap(joined);
+                (body, cut || capped)
+            }
         };
         if body.trim().is_empty() {
             return Self::Missing;
@@ -53,15 +57,19 @@ fn cap(text: String) -> (String, bool) {
     (cut, true)
 }
 
-/// Cues as one line each, with the speaker when the source names one.
-fn cues(value: &Value) -> String {
+/// Cues as one line each, with the speaker when the source names one, and
+/// whether a cue was cut. A cue may use the whole transcript's budget.
+fn cues(value: &Value) -> (String, bool) {
+    let mut cut = false;
     let mut lines = Vec::new();
     let mut length = 0;
     for cue in value.as_array().into_iter().flatten() {
         // Each cue is cleaned on its own, so markup in one cannot swallow the
         // line breaks between them.
-        let text =
-            crate::text::plain(cue["text"].as_str().unwrap_or_default(), 2_000).replace('\n', " ");
+        let (text, shortened) =
+            crate::text::plain_cut(cue["text"].as_str().unwrap_or_default(), LIMIT);
+        let text = text.replace('\n', " ");
+        cut |= shortened;
         if text.is_empty() {
             continue;
         }
@@ -79,5 +87,5 @@ fn cues(value: &Value) -> String {
             break;
         }
     }
-    lines.join("\n")
+    (lines.join("\n"), cut)
 }
