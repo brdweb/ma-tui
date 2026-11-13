@@ -333,6 +333,9 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
         },
         Update::MediaItem { uri, item } => {
             let item = item.as_ref();
+            // From 2.11 a library item event carries no favourite state (it is
+            // per user now); only a real true or false changes what is shown.
+            let favorite = item.and_then(|item| item["favorite"].as_bool());
             let showing_favorites = matches!(
                 &app.music.page.target,
                 Target::Library { favorite: true, .. }
@@ -344,10 +347,11 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                     continue;
                 }
                 page_matched = true;
-                if let Some(item) = item {
-                    let favorite = item["favorite"] == true;
-                    page_favorite_changed |= media.favorite != favorite;
-                    media.favorite = favorite;
+                if item.is_some() {
+                    if let Some(favorite) = favorite {
+                        page_favorite_changed |= media.favorite != favorite;
+                        media.favorite = favorite;
+                    }
                     media.in_library = true;
                 } else {
                     media.in_library = false;
@@ -360,8 +364,10 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                 if !matches_media(media, &uri, item) {
                     continue;
                 }
-                if let Some(item) = item {
-                    media.favorite = item["favorite"] == true;
+                if item.is_some() {
+                    if let Some(favorite) = favorite {
+                        media.favorite = favorite;
+                    }
                     media.in_library = true;
                 } else {
                     media.in_library = false;
@@ -370,14 +376,13 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
             if let Some(current) = app.queue_details.pointer_mut("/current_item/media_item") {
                 let media = Media::parse(current, "track");
                 if matches_media(&media, &uri, item) {
-                    if let Some(item) = item {
-                        current["favorite"] = serde_json::Value::Bool(item["favorite"] == true);
+                    if let Some(favorite) = favorite {
+                        current["favorite"] = serde_json::Value::Bool(favorite);
                     }
                 }
             }
             if showing_favorites
-                && (page_favorite_changed
-                    || (!page_matched && item.is_some_and(|item| item["favorite"] == true)))
+                && (page_favorite_changed || (!page_matched && favorite == Some(true)))
             {
                 return Some(app.music.reload());
             }

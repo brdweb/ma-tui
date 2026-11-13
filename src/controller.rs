@@ -96,6 +96,24 @@ impl Pending {
             previous.abort();
         }
     }
+    fn finished(&self) -> bool {
+        self.0.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+}
+
+/// A favourite change applied to the rows showing the item under any of its
+/// provider URIs. The 2.11 event names only the library item, so its mappings
+/// are read; `None` when that read fails or the item has none.
+pub async fn favorite_with_mappings(api: &ApiClient, uri: &str, favorite: bool) -> Option<Update> {
+    let item = api.item(uri).await.ok()?;
+    let mappings = item["provider_mappings"]
+        .as_array()
+        .filter(|mappings| !mappings.is_empty())?
+        .clone();
+    Some(Update::MediaItem {
+        uri: uri.to_owned(),
+        item: Some(serde_json::json!({ "favorite": favorite, "provider_mappings": mappings })),
+    })
 }
 
 impl Drop for Pending {
@@ -171,6 +189,8 @@ impl Controller {
             let (mut covering, mut cover) = (Pending::default(), String::new());
             // Chapters likewise belong to the item, not to the snapshot.
             let (mut chaptering, mut chaptered) = (Pending::default(), String::new());
+            // One mapping lookup per item; a newer change for it replaces the older.
+            let mut favoriting: std::collections::HashMap<String, Pending> = Default::default();
             loop {
                 let mut stale = Stale::all();
                 tokio::select! {
@@ -229,6 +249,21 @@ impl Controller {
                                     if tx.send(Update::MediaItem { uri, item }).await.is_err() {
                                         return;
                                     }
+                                }
+                                // Rows under the library URI change at once;
+                                // provider rows once the mappings are read.
+                                Event::Favorite { uri, favorite } => {
+                                    let item = Some(serde_json::json!({ "favorite": favorite }));
+                                    if tx.send(Update::MediaItem { uri: uri.clone(), item }).await.is_err() {
+                                        return;
+                                    }
+                                    favoriting.retain(|_, task| !task.finished());
+                                    let (api, tx) = (api.clone(), tx.clone());
+                                    favoriting.entry(uri.clone()).or_default().replace(tokio::spawn(async move {
+                                        if let Some(update) = favorite_with_mappings(&api, &uri, favorite).await {
+                                            let _ = tx.send(update).await;
+                                        }
+                                    }));
                                 }
                             }
                             next = events.as_mut().and_then(|rx| rx.try_recv().ok());

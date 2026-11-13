@@ -113,6 +113,29 @@ no name or message here says "2.11" for a schema number.
 Sources: `controllers/webserver/controller.py` (`/info`) and
 `helpers/api.py` at server tags 2.10.9 and 2.11.0b8.
 
+### Sorting and per-user favourites (2026-11-12)
+
+From 2.11.0b5 (schema 91), library listings take `sort_field` and
+`sort_direction`, and `order_by` is deprecated: it is honoured only when no
+`sort_field` is sent, through `LEGACY_SORT_KEYS`. `Order::apply` writes
+whichever spelling the server's schema calls for, in one place, for every
+`library_items` call. Year is offered for albums only, because 2.11.0b8 lists
+no year sort for library tracks and rejects one, even through the legacy
+`year_desc`.
+
+From 2.11.0b3, a favourite belongs to one user: `favorite_updated` goes only to
+that user's connections, carrying a `FavoriteUpdate` whose `favorite` is true
+(a like), false (a dislike) or null (cleared). It is applied as a library item
+change that carries only that state, so rows, search results, the now-playing
+item and the favourites listing follow it as they already followed
+`media_item_updated`. Library item events no longer carry favourite state at
+all, so an event changes the heart only when it carries a real true or false.
+
+Sources: `controllers/music/sorting.py`, `controllers/music/constants.py`,
+`controllers/music/media/base.py` and
+`tests/controllers/webserver/test_event_dispatch.py` at server tag 2.11.0b8,
+and `favorite_update.py` in music-assistant/models 1.1.233.
+
 ## Event stream (2026-09-16)
 
 Commands stay on HTTP; state changes arrive on the `/ws` socket instead of being
@@ -275,10 +298,20 @@ hydrated per user from the playlog table and falling back to the provider's own
 state. Both are null when the provider does not report progress, which is not
 the same as "not played": nothing is shown then rather than claiming unplayed.
 
-A podcast opens into `music/podcasts/podcast_episodes`. An audiobook does not
-open into a listing: it is one playable item with a resume point, and its
-chapters come from the full item (see Chapters below). Its item menu offers
-**Chapters…** to start at one.
+A podcast opens into `music/podcasts/podcast_episodes`, newest first, a page
+at a time (`[`/`]`). From 2.11.0b6 (schema 99) that command returns one sorted
+page, with `limit` defaulting to 500. Earlier servers ignore the paging
+arguments and return every episode in the provider's order. So a server at
+schema 99 or later is asked for `sort_field: "position"`, `sort_direction:
+"desc"`, `limit` and `offset`. Anything older, or a server whose schema is not
+known yet, is asked for everything (`limit: 0`, which a paging server also
+honours) and paged here. Either way the order comes from each episode's
+`position`, which counts from the oldest (`get_episode_positions`), then from
+its release date, never from arrival order: the 2.10.9 feed provider already
+sends episodes newest first, so reversing them was wrong there too. An
+audiobook does not open into a listing: it is one playable item with a resume
+point, and its chapters come from the full item (see Chapters below). Its item
+menu offers **Chapters…** to start at one.
 
 There is no server-side filter for unplayed episodes: `library_items` takes
 `played_only`, which selects the opposite, and has no unplayed equivalent. The
