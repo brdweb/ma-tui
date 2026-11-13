@@ -47,6 +47,8 @@ pub struct Details {
     pub showing_transcript: bool,
     /// The transcript's timed cues, empty when it has none.
     pub cues: Vec<crate::transcript::Cue>,
+    /// Whether cues were left out or shortened to stay within the limits.
+    pub cues_truncated: bool,
     /// Whether the transcript scrolls itself to the cue being played. Off once
     /// the reader scrolls; End turns it back on.
     pub following: bool,
@@ -309,14 +311,17 @@ fn cue_lines(
 pub fn wrapped(text: &str, width: usize) -> usize {
     let columns = |text: &str| ratatui::text::Span::raw(text).width();
     let width = width.max(1);
-    let (mut rows, mut used) = (1, 0);
-    for word in text.split(' ') {
+    // Leading spaces, such as a cue's indent, take columns on the first row.
+    let rest = text.trim_start_matches(' ');
+    let (mut rows, mut used) = (1, text.len() - rest.len());
+    for (index, word) in rest.split(' ').enumerate() {
         let length = columns(word);
-        if used > 0 && used + 1 + length > width {
+        let gap = usize::from(index > 0);
+        if used > 0 && used + gap + length > width {
             rows += 1;
             used = 0;
         } else if used > 0 {
-            used += 1;
+            used += gap;
         }
         if used + length <= width {
             used += length;
@@ -415,14 +420,21 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         lines.truncate(2);
         match &details.transcript {
             Some(Transcript::Text { body, truncated }) => {
-                if *truncated {
-                    lines.push(Line::styled(
-                        format!(
-                            "Transcript shortened to its first {} characters",
-                            crate::transcript::LIMIT
-                        ),
-                        dim,
-                    ));
+                // While following, the cues are shown, so their own cut counts.
+                let notice = match position {
+                    Some(_) if details.cues_truncated => Some(format!(
+                        "Transcript shortened to its first {} characters or {} cues",
+                        crate::transcript::LIMIT,
+                        crate::transcript::MAX_CUES
+                    )),
+                    None if *truncated => Some(format!(
+                        "Transcript shortened to its first {} characters",
+                        crate::transcript::LIMIT
+                    )),
+                    _ => None,
+                };
+                if let Some(notice) = notice {
+                    lines.push(Line::styled(notice, dim));
                     lines.push(Line::default());
                 }
                 match position {

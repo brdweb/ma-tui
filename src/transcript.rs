@@ -106,26 +106,32 @@ pub struct Cue {
     pub text: String,
 }
 
-/// The timed cues of a `[text, cues]` answer, in start order. Cues with no
-/// usable start time or no text are dropped, and the whole set is capped by
-/// count and by [`LIMIT`] characters, like the text.
-pub fn timed_cues(value: &Value) -> Vec<Cue> {
-    let mut cues = Vec::new();
-    let mut length = 0;
+/// The timed cues of a `[text, cues]` answer, in start order, and whether
+/// any were cut. Cues with no usable start time or no text are dropped, and
+/// the whole set is capped by count and by [`LIMIT`] characters, like the
+/// text.
+pub fn timed_cues(value: &Value) -> (Vec<Cue>, bool) {
+    let (mut cues, mut length, mut cut) = (Vec::new(), 0, false);
     for cue in value[1].as_array().into_iter().flatten() {
         let Some(start) = cue["start"].as_f64().filter(|s| s.is_finite() && *s >= 0.0) else {
             continue;
         };
         // A cue may use whatever is left of the transcript's budget.
         let remaining = LIMIT.saturating_sub(length);
-        if remaining == 0 || cues.len() == MAX_CUES {
-            break;
-        }
-        let text = crate::text::plain(cue["text"].as_str().unwrap_or_default(), remaining)
-            .replace('\n', " ");
+        let full = remaining == 0 || cues.len() == MAX_CUES;
+        // Once full, a character is enough to tell whether the cue would show.
+        let (text, shortened) =
+            crate::text::plain_cut(cue["text"].as_str().unwrap_or_default(), remaining.max(1));
+        let text = text.replace('\n', " ");
         if text.is_empty() {
             continue;
         }
+        // A cue that would show is left out.
+        if full {
+            cut = true;
+            break;
+        }
+        cut |= shortened;
         let speaker =
             crate::text::plain(cue["speaker"].as_str().unwrap_or_default(), 80).replace('\n', " ");
         let end = cue["end"]
@@ -141,7 +147,7 @@ pub fn timed_cues(value: &Value) -> Vec<Cue> {
     }
     // Stable, so cues sharing a start keep the source's order.
     cues.sort_by(|a, b| a.start.total_cmp(&b.start));
-    cues
+    (cues, cut)
 }
 
 /// The cue being spoken at `position` seconds: the last one started, unless
