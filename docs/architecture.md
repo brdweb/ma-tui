@@ -328,6 +328,12 @@ item menu opens without a selection. `playlog_updated` re-reads a listing that
 would show progress, throttled, because a playing audiobook produces those
 events continuously.
 
+An episode row reads `Show · S2 E14 · 2026-10-30 · resume 12:04`. The
+numbers are the publisher's `season` and `episode_number` (2.11.0b4 and later,
+`helpers/podcast_parsers.py`, `get_publisher_number`). Both are null for many
+feeds and absent on 2.10.x, and either one is shown alone when the other is
+missing. The date is the calendar date of `metadata.release_date` as sent.
+
 Sources: `controllers/music/controller.py`, `controllers/music/media/base.py`,
 `media/podcasts.py` and `media/audiobooks.py` at server tag 2.10.2, and
 `media_items/media_item.py` in music-assistant/models.

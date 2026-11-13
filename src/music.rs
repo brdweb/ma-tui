@@ -292,10 +292,14 @@ impl Media {
         } else {
             belongs
         };
-        // When an episode came out matters as much as which show it is from.
-        let published = match release_date(v) {
-            Some(date) if kind == "podcast_episode" => format!(" · {date}"),
-            _ => String::new(),
+        // Which episode, and when it came out, matter as much as the show.
+        let published = match (episode_number(v), release_date(v)) {
+            _ if kind != "podcast_episode" => String::new(),
+            (number, date) => [number, date]
+                .into_iter()
+                .flatten()
+                .map(|part| format!(" · {part}"))
+                .collect(),
         };
         let detail = clean(&format!("{belongs}{published}{progress}"));
         Self {
@@ -398,6 +402,20 @@ fn position(ms: u64) -> String {
         (hours, minutes, seconds) => format!("{hours}:{minutes:02}:{seconds:02}"),
     }
 }
+/// The publisher's numbering of an episode, `S2 E14`, `E14` or `S2`, from
+/// `season` and `episode_number` (2.11.0b4 and later). Both are null for many
+/// feeds and absent before 2.11; anything but a positive whole number is
+/// ignored.
+pub fn episode_number(v: &Value) -> Option<String> {
+    let number = |key: &str| v[key].as_u64().filter(|n| *n > 0);
+    match (number("season"), number("episode_number")) {
+        (Some(season), Some(episode)) => Some(format!("S{season} E{episode}")),
+        (None, Some(episode)) => Some(format!("E{episode}")),
+        (Some(season), None) => Some(format!("S{season}")),
+        (None, None) => None,
+    }
+}
+
 /// The calendar date an item was released, from `metadata.release_date`.
 /// The server sends an ISO 8601 timestamp (the podcast providers set it in
 /// UTC); its date is shown as sent, without converting time zones.
@@ -431,7 +449,7 @@ pub fn demo_listing(target: &Target) -> Vec<Media> {
     };
     vec![Media::parse(
         &json!({"name":format!("Sample {kind} — offline preview"),"item_id":"sample","provider":"demo","uri":format!("demo://{kind}/sample"),"media_type":kind,"artists":[{"name":"Fictional artist"}],
-                "podcast":{"name":"Fictional show"},"metadata":{"release_date":"2026-11-01T06:00:00+00:00"}}),
+                "podcast":{"name":"Fictional show"},"season":2,"episode_number":14,"metadata":{"release_date":"2026-11-01T06:00:00+00:00"}}),
         kind,
     )]
 }
