@@ -271,6 +271,15 @@ async fn main() -> Result<()> {
             return Ok(());
         };
         let api = ma_tui::api::ApiClient::new(&config.server, token_value)?;
+        // The schema decides a few request shapes. Until it is known the 2.10.x
+        // shapes are used, which newer servers also accept, so startup does not
+        // wait for it.
+        tokio::spawn({
+            let api = api.clone();
+            async move {
+                let _ = api.refresh_schema().await;
+            }
+        });
         // The visualizer analyzes only what this endpoint plays.
         let spectrum = ma_tui::visualizer::Analyzer::new();
         let audio = if (args.local || config.local_playback) && !args.remote_only {
