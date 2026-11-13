@@ -16,6 +16,9 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 pub const PAGE_SIZE: usize = 100;
+/// The first API schema whose library listings take `sort_field` and
+/// `sort_direction` (2.11.0b5); `order_by` is deprecated from then on.
+pub const SORT_FIELDS_SCHEMA: u32 = 91;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -138,6 +141,34 @@ impl Order {
         Self::Random,
     ];
 
+    /// The field and direction a server from schema `SORT_FIELDS_SCHEMA`
+    /// takes instead of `order_by`. Random has no direction.
+    pub fn sort(self) -> (&'static str, Option<&'static str>) {
+        match self {
+            Self::Name => ("sort_name", Some("asc")),
+            Self::RecentlyAdded => ("timestamp_added", Some("desc")),
+            Self::LastPlayed => ("last_played", Some("desc")),
+            Self::MostPlayed => ("play_count", Some("desc")),
+            Self::Year => ("year", Some("desc")),
+            Self::Random => ("random", None),
+        }
+    }
+
+    /// Put this order into a library listing's arguments, in the spelling the
+    /// server understands: `sort_field` and `sort_direction` from schema
+    /// `SORT_FIELDS_SCHEMA` (where `order_by` is deprecated), `order_by` before.
+    pub fn apply(self, args: &mut Value, sort_fields: bool) {
+        if sort_fields {
+            let (field, direction) = self.sort();
+            args["sort_field"] = json!(field);
+            if let Some(direction) = direction {
+                args["sort_direction"] = json!(direction);
+            }
+        } else {
+            args["order_by"] = json!(self.order_by());
+        }
+    }
+
     /// The server's spelling stays beside the UI choices that select it.
     pub fn order_by(self) -> &'static str {
         match self {
@@ -162,8 +193,10 @@ impl Order {
         }
     }
 
+    /// Year is offered for albums only: 2.11 lists no year sort for library
+    /// tracks and rejects one (`controllers/music/sorting.py`, 2.11.0b8).
     fn next(self, kind: Kind) -> Self {
-        let orders: &[Self] = if matches!(kind, Kind::Albums | Kind::Tracks) {
+        let orders: &[Self] = if kind == Kind::Albums {
             &Self::WITH_YEAR
         } else {
             &Self::WITHOUT_YEAR
@@ -743,10 +776,11 @@ impl ApiClient {
     async fn unplayed_episodes(&self) -> Result<(Vec<Media>, Option<Target>)> {
         use futures_util::StreamExt;
         let shows = self
-            .command(
-                "music/podcasts/library_items",
-                json!({"limit":PAGE_SIZE,"offset":0,"order_by":"sort_name"}),
-            )
+            .command("music/podcasts/library_items", {
+                let mut args = json!({"limit":PAGE_SIZE,"offset":0});
+                Order::Name.apply(&mut args, self.schema_at_least(SORT_FIELDS_SCHEMA));
+                args
+            })
             .await?;
         let shows: Vec<(String, String)> = shows
             .as_array()
@@ -824,9 +858,9 @@ impl ApiClient {
                 let mut args = json!({
                     "limit":PAGE_SIZE,
                     "offset":offset,
-                    "order_by":order.order_by(),
                     "favorite":if *favorite {Some(true)} else {None}
                 });
+                order.apply(&mut args, self.schema_at_least(SORT_FIELDS_SCHEMA));
                 if let Some(search) = search {
                     args["search"] = Value::String(search.clone());
                 }

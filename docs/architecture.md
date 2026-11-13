@@ -113,6 +113,29 @@ no name or message here says "2.11" for a schema number.
 Sources: `controllers/webserver/controller.py` (`/info`) and
 `helpers/api.py` at server tags 2.10.9 and 2.11.0b8.
 
+### Sorting and per-user favourites (2026-11-12)
+
+From 2.11.0b5 (schema 91), library listings take `sort_field` and
+`sort_direction`, and `order_by` is deprecated: it is honoured only when no
+`sort_field` is sent, through `LEGACY_SORT_KEYS`. `Order::apply` writes
+whichever spelling the server's schema calls for, in one place, for every
+`library_items` call. Year is offered for albums only, because 2.11.0b8 lists
+no year sort for library tracks and rejects one, even through the legacy
+`year_desc`.
+
+From 2.11.0b3, a favourite belongs to one user: `favorite_updated` goes only to
+that user's connections, carrying a `FavoriteUpdate` whose `favorite` is true
+(a like), false (a dislike) or null (cleared). It is applied as a library item
+change that carries only that state, so rows, search results, the now-playing
+item and the favourites listing follow it as they already followed
+`media_item_updated`. Library item events no longer carry favourite state at
+all, so an event changes the heart only when it carries a real true or false.
+
+Sources: `controllers/music/sorting.py`, `controllers/music/constants.py`,
+`controllers/music/media/base.py` and
+`tests/controllers/webserver/test_event_dispatch.py` at server tag 2.11.0b8,
+and `favorite_update.py` in music-assistant/models 1.1.233.
+
 ## Event stream (2026-09-16)
 
 Commands stay on HTTP; state changes arrive on the `/ws` socket instead of being
