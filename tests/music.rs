@@ -1270,3 +1270,35 @@ fn episode_rows_show_the_publish_date_when_known() {
     );
     assert_eq!(album.detail, "Band");
 }
+
+/// Publisher numbering appears on an episode row when the server has it
+/// (2.11.0b4+); many feeds number nothing, and older servers send neither.
+#[test]
+fn episode_rows_show_season_and_episode_numbers() {
+    let row = |numbers: serde_json::Value| {
+        let mut item = json!({"name":"Episode","media_type":"podcast_episode",
+                              "uri":"feed://podcast_episode/e","podcast":{"name":"Show"},
+                              "metadata":{"release_date":"2026-10-30T08:00:00+00:00"}});
+        for (key, value) in numbers.as_object().unwrap() {
+            item[key] = value.clone();
+        }
+        Media::parse(&item, "podcast_episode").detail
+    };
+    assert_eq!(
+        row(json!({"season":2,"episode_number":14})),
+        "Show · S2 E14 · 2026-10-30"
+    );
+    assert_eq!(row(json!({"episode_number":14})), "Show · E14 · 2026-10-30");
+    assert_eq!(
+        row(json!({"season":2,"episode_number":null})),
+        "Show · S2 · 2026-10-30"
+    );
+    assert_eq!(row(json!({})), "Show · 2026-10-30");
+    for junk in [json!(0), json!(-3), json!("14"), json!(1.5)] {
+        assert_eq!(
+            row(json!({"season":junk,"episode_number":junk})),
+            "Show · 2026-10-30",
+            "{junk}"
+        );
+    }
+}
