@@ -171,10 +171,22 @@ pub fn facts(item: &Value) -> Vec<(&'static str, String)> {
         ),
         ("Links", links.join(" · ")),
     ];
+    // Lists are capped as a whole too, not only entry by entry.
     candidates
         .into_iter()
         .filter(|(_, value)| !value.is_empty())
+        .map(|(label, value)| (label, capped(value)))
         .collect()
+}
+
+/// `value` cut to [`FACT_LIMIT`] characters, ending in `…` when cut.
+fn capped(value: String) -> String {
+    if value.chars().count() <= FACT_LIMIT {
+        return value;
+    }
+    let mut cut: String = value.chars().take(FACT_LIMIT - 1).collect();
+    cut.push('…');
+    cut
 }
 
 /// Keys while the pane is open: scroll, or close it.

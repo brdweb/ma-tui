@@ -242,3 +242,13 @@ fn a_details_read_that_could_not_be_sent_stops_loading() {
     assert!(!pane.error.is_empty());
     assert!(app.status.starts_with("Busy"));
 }
+
+#[test]
+fn a_long_list_fact_is_capped_as_a_whole() {
+    let authors: Vec<String> = (0..500).map(|n| format!("Author {n}")).collect();
+    let facts = details::facts(&json!({"authors": authors}));
+    let (label, value) = &facts[0];
+    assert_eq!(*label, "Authors");
+    assert_eq!(value.chars().count(), 300);
+    assert!(value.ends_with('…'));
+}
