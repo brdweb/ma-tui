@@ -217,3 +217,28 @@ fn a_transcript_read_that_could_not_be_sent_can_be_retried() {
         Action::LoadTranscript { .. }
     ));
 }
+
+#[test]
+fn a_long_cue_is_kept_whole_within_the_transcript_limit() {
+    let long = "word ".repeat(600);
+    let Transcript::Text { body, truncated } =
+        Transcript::parse(&json!([null, [{"start":0,"text":long}]]))
+    else {
+        panic!("a transcript");
+    };
+    assert_eq!(body, long.trim_end());
+    assert!(!truncated);
+}
+
+#[test]
+fn a_cue_left_out_at_exactly_the_limit_still_says_so() {
+    let full = "w".repeat(LIMIT);
+    let Transcript::Text { body, truncated } = Transcript::parse(&json!([null, [
+        {"start":0,"text":full},
+        {"start":1,"text":"Dropped"},
+    ]])) else {
+        panic!("a transcript");
+    };
+    assert_eq!(body.chars().count(), LIMIT);
+    assert!(truncated);
+}

@@ -248,11 +248,21 @@ impl Media {
         // type reads better than a provider instance id, which means nothing to
         // anyone reading it.
         let belongs = crate::api::byline(v);
-        let detail = if belongs.is_empty() {
-            clean(&format!("{}{progress}", readable(&kind)))
+        let belongs = if belongs.is_empty() {
+            readable(&kind)
         } else {
-            clean(&format!("{belongs}{progress}"))
+            belongs
         };
+        // Which episode, and when it came out, matter as much as the show.
+        let published = match (episode_number(v), release_date(v)) {
+            _ if kind != "podcast_episode" => String::new(),
+            (number, date) => [number, date]
+                .into_iter()
+                .flatten()
+                .map(|part| format!(" · {part}"))
+                .collect(),
+        };
+        let detail = clean(&format!("{belongs}{published}{progress}"));
         Self {
             title: clean(&value("name")),
             detail,
@@ -353,6 +363,32 @@ fn position(ms: u64) -> String {
         (hours, minutes, seconds) => format!("{hours}:{minutes:02}:{seconds:02}"),
     }
 }
+/// The publisher's numbering of an episode, `S2 E14`, `E14` or `S2`, from
+/// `season` and `episode_number` (2.11.0b4 and later). Both are null for many
+/// feeds and absent before 2.11; anything but a positive whole number is
+/// ignored.
+pub fn episode_number(v: &Value) -> Option<String> {
+    let number = |key: &str| v[key].as_u64().filter(|n| *n > 0);
+    match (number("season"), number("episode_number")) {
+        (Some(season), Some(episode)) => Some(format!("S{season} E{episode}")),
+        (None, Some(episode)) => Some(format!("E{episode}")),
+        (Some(season), None) => Some(format!("S{season}")),
+        (None, None) => None,
+    }
+}
+
+/// The calendar date an item was released, from `metadata.release_date`.
+/// The server sends an ISO 8601 timestamp (the podcast providers set it in
+/// UTC); its date is shown as sent, without converting time zones.
+pub fn release_date(v: &Value) -> Option<String> {
+    let date = v["metadata"]["release_date"].as_str()?.get(..10)?;
+    let shaped = date.bytes().enumerate().all(|(index, byte)| match index {
+        4 | 7 => byte == b'-',
+        _ => byte.is_ascii_digit(),
+    });
+    shaped.then(|| date.to_owned())
+}
+
 fn clean(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).take(512).collect()
 }
@@ -364,17 +400,17 @@ pub fn demo_listing(target: &Target) -> Vec<Media> {
         Target::Library { kind, .. } => kind.media_type(),
         Target::Artist { .. } => "album",
         Target::Providers { .. } => "playlist",
+        Target::Podcast { .. } | Target::UnplayedEpisodes => "podcast_episode",
         Target::Album { .. }
         | Target::Playlist { .. }
         | Target::ArtistTracks { .. }
-        | Target::Podcast { .. }
         | Target::InProgress
         | Target::RecentlyAdded
-        | Target::RecentlyPlayed
-        | Target::UnplayedEpisodes => "track",
+        | Target::RecentlyPlayed => "track",
     };
     vec![Media::parse(
-        &json!({"name":format!("Sample {kind} — offline preview"),"item_id":"sample","provider":"demo","uri":format!("demo://{kind}/sample"),"media_type":kind,"artists":[{"name":"Fictional artist"}]}),
+        &json!({"name":format!("Sample {kind} — offline preview"),"item_id":"sample","provider":"demo","uri":format!("demo://{kind}/sample"),"media_type":kind,"artists":[{"name":"Fictional artist"}],
+                "podcast":{"name":"Fictional show"},"season":2,"episode_number":14,"metadata":{"release_date":"2026-11-01T06:00:00+00:00"}}),
         kind,
     )]
 }
@@ -917,6 +953,7 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
         error: String::new(),
         filter: String::new(),
         filtering: false,
+        item: String::new(),
     });
     Action::None
 }
@@ -960,6 +997,7 @@ pub(crate) fn queue_choices(app: &mut App, title: &str, replace: Action, add: Ac
         error: String::new(),
         filter: String::new(),
         filtering: false,
+        item: String::new(),
     });
     Action::None
 }
