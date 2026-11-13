@@ -455,10 +455,16 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
             }
         }
         Update::ChapterList { uri, result } => {
+            // Only the request still waited for opens a picker.
+            if app.chapter_picker.as_deref() != Some(uri.as_str()) {
+                return None;
+            }
+            app.chapter_picker = None;
             if app.settings.is_some() {
                 return None;
             }
-            if app.menu.as_ref().is_some_and(|menu| menu.prompt.is_some()) {
+            // Never replace a menu opened while the read was out.
+            if app.menu.is_some() {
                 app.status = "Chapters loaded; close the menu to choose".into();
                 return None;
             }
