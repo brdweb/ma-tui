@@ -664,3 +664,36 @@ async fn batch_and_folder_actions_require_a_player_at_execution_time() {
     controller.shutdown().await;
     server.abort();
 }
+
+/// The server finds an audiobook chapter by its number, sent as a string.
+#[tokio::test]
+async fn playing_from_a_chapter_replaces_the_queue_with_start_item() {
+    use serde_json::json;
+    let (mut controller, mut received, server) = queue_fixture(json!([])).await;
+    controller
+        .requests
+        .send(Request::new(
+            Some("selected-member".into()),
+            Action::PlayChapter {
+                uri: "library://audiobook/7".into(),
+                chapter: 3,
+            },
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        queue_notice(&mut controller).await,
+        "Command accepted; refreshing state"
+    );
+    let calls = queue_calls(&mut received);
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["command"], "player_queues/get_active_queue");
+    assert_eq!(calls[1]["command"], "player_queues/play_media");
+    assert_eq!(
+        calls[1]["args"],
+        json!({"queue_id":"selected-queue","media":"library://audiobook/7",
+               "option":"replace","start_item":"3"})
+    );
+    controller.shutdown().await;
+    server.abort();
+}

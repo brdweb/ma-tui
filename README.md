@@ -149,6 +149,7 @@ playback.
 | z / l | Toggle shuffle / cycle repeat off→all→one |
 | + / - | Volume up/down (the server chooses the step) |
 | Left / Right | Seek backward/forward 10 seconds |
+| ( / ) | Previous / next chapter of the playing audiobook or episode; ( restarts the current chapter after its first few seconds |
 | / | Search; Enter submits, Esc cancels |
 | b / F3 | Open music browser |
 | Enter in music/search | Open a collection/folder, or open a playable item's menu |
@@ -195,7 +196,7 @@ With Queue focused, **c** clears its current queue and stops playback. This
 requires an active queue; it never guesses an empty queue ID.
 
 The controls menu covers transport and external sources, mute, power,
-individual/group volume, absolute seek, sleep timers, grouping, sound modes,
+individual/group volume, absolute seek, the playing item's chapters, sleep timers, grouping, sound modes,
 writable player options, queue shuffle/repeat, autoplay/crossfade,
 play/remove/reorder/clear, **Save queue as playlist…**, playback transfer,
 audiobook/podcast speed, and media URIs. Entries are grouped under headings and
@@ -309,8 +310,10 @@ Album art needs a terminal that draws sixel to look sharp — foot does, Alacrit
 has no image protocol at all — and a multiplexer will generally not forward
 either.
 
-MA-TUI does not administer users, providers, DSP or the MA server. Audiobooks
-have no chapter navigation; the 2.10.5 integration treats a book as one playable item.
+MA-TUI does not administer users, providers, DSP or the MA server. Only an
+audiobook can be started at a chosen chapter (**Chapters…** in its item menu);
+Music Assistant 2.10.9 ignores a chapter start for a podcast episode, so an
+episode's chapters are reached with ( and ) once it is playing.
 Player support varies; server rejections appear as command errors. Playlist
 additions finish in the background on the server, and radio uses Music
 Assistant's dynamic radio playlists. Prolonged playback, broader hardware and

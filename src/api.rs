@@ -373,6 +373,24 @@ impl ApiClient {
         }
         Ok(())
     }
+    /// Replace the queue with an audiobook and start at one of its chapters.
+    /// The server matches `start_item` against each chapter's `position`
+    /// (`get_audiobook_resume_point`, server 2.10.9), as a string.
+    pub async fn play_chapter(&self, player_id: &str, uri: &str, chapter: u64) -> Result<()> {
+        let q = self.active_queue(player_id).await?;
+        self.command(
+            "player_queues/play_media",
+            json!({
+                "queue_id":text(&q,"queue_id"),
+                "media":uri,
+                "option":"replace",
+                "start_item":chapter.to_string(),
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn play_next_uri(&self, player_id: &str, uri: &str) -> Result<()> {
         self.media(player_id, uri, "next").await
     }
