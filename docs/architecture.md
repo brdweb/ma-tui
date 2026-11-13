@@ -94,6 +94,25 @@ and synthetic fixtures do not establish live 2.10.5 compatibility; see the
 candidate publication gates in `docs/releasing.md`. The 2.11 personal
 favourite/event changes and Sendspin 1.0 RC are outside this release.
 
+### API schema version (2026-11-12)
+
+`GET /info` reports `schema_version` beside `server_version`: 65 on 2.10.5 and
+2.10.9, 101 on 2.11.0b8. The client keeps the last value it read, shared by
+every clone of `ApiClient`. It reads it once at startup in the background and
+again whenever the event stream reconnects, because a reconnect can follow a
+server upgrade. `schema_at_least(n)` is false while the schema is unknown,
+missing or malformed (anything but a positive whole number that fits in 32
+bits), so those cases behave like 2.10.x.
+
+Prefer request shapes that both generations accept: command arguments the
+handler does not know are ignored unless the command is registered strict
+(`helpers/api.py`, `parse_arguments`). Branch on the schema only where the
+behaviour really differs. The 2.11.0 stable schema number is not known yet, so
+no name or message here says "2.11" for a schema number.
+
+Sources: `controllers/webserver/controller.py` (`/info`) and
+`helpers/api.py` at server tags 2.10.9 and 2.11.0b8.
+
 ## Event stream (2026-09-16)
 
 Commands stay on HTTP; state changes arrive on the `/ws` socket instead of being
@@ -276,6 +295,12 @@ speaker, which is why the controls menu permits a player-free action and the
 item menu opens without a selection. `playlog_updated` re-reads a listing that
 would show progress, throttled, because a playing audiobook produces those
 events continuously.
+
+An episode row reads `Show · S2 E14 · 2026-10-30 · resume 12:04`. The
+numbers are the publisher's `season` and `episode_number` (2.11.0b4 and later,
+`helpers/podcast_parsers.py`, `get_publisher_number`). Both are null for many
+feeds and absent on 2.10.x, and either one is shown alone when the other is
+missing. The date is the calendar date of `metadata.release_date` as sent.
 
 Sources: `controllers/music/controller.py`, `controllers/music/media/base.py`,
 `media/podcasts.py` and `media/audiobooks.py` at server tag 2.10.2, and
