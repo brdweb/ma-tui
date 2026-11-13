@@ -140,6 +140,8 @@ impl Controller {
         let (requests, mut commands) = mpsc::channel::<Request>(32);
         let (tx, updates) = mpsc::channel(16);
         let task = tokio::spawn(async move {
+            // Re-read on reconnect: the server may have been upgraded.
+            let mut learning = Pending::default();
             let mut events = events;
             // Having a receiver does not mean the socket connected or
             // authenticated. Poll until the stream explicitly reports Online.
@@ -191,6 +193,11 @@ impl Controller {
                                 // Anything shown may have changed while it was down.
                                 Event::Online => {
                                     stale = Stale::all();
+                                    // A reconnect can follow a server upgrade.
+                                    let schema = api.clone();
+                                    learning.replace(tokio::spawn(async move {
+                                        let _ = schema.refresh_schema().await;
+                                    }));
                                     interval = tokio::time::interval(POLL_LIVE);
                                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                                     if tx.send(Update::Stream(true)).await.is_err() { return; }

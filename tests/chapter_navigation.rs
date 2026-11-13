@@ -183,3 +183,19 @@ fn the_player_shows_the_chapter_and_the_hints_name_the_keys() {
     assert!(!screen.contains("Ch "));
     assert!(!screen.contains("(/) chapter"));
 }
+
+#[test]
+fn a_chapter_seek_is_refused_once_another_item_plays() {
+    let mut app = playing_app(list(&[("Intro", 0.0), ("Middle", 60.5)]));
+    app.menu = Some(Menu::new(&app));
+    app.key(key(KeyCode::Char('/')));
+    for c in "middle".chars() {
+        app.key(key(KeyCode::Char(c)));
+    }
+    // The queue moves on to another item while the menu is open.
+    app.queue_details = json!({"current_item":{"media_item":{"uri":"x://book/2"}}});
+    app.elapsed = 5.0;
+    assert_eq!(app.key(key(KeyCode::Enter)), Action::None);
+    assert_eq!(app.elapsed, 5.0, "the new item was not sought");
+    assert!(app.status.contains("Another item is playing"));
+}

@@ -141,6 +141,10 @@ pub struct Menu {
     pub cursor: usize,
     pub filter: String,
     pub filtering: bool,
+    /// The playing item's URI when the menu was built. Its chapter seeks are
+    /// absolute positions in that item, so they are refused once another
+    /// item plays.
+    pub item: String,
 }
 
 impl Menu {
@@ -221,6 +225,7 @@ impl Menu {
             cursor: 0,
             filter: String::new(),
             filtering: false,
+            item: crate::chapters::playing_uri(&app.queue_details).to_owned(),
         };
         let Some(player) = app
             .players
@@ -784,7 +789,14 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
             } else {
                 app.connected
             };
-            let action = if permitted {
+            let stale_chapter = menu
+                .selected()
+                .is_some_and(|entry| entry.section == CHAPTERS)
+                && crate::chapters::playing_uri(&app.queue_details) != menu.item;
+            let action = if stale_chapter {
+                app.status = "Another item is playing; reopen controls for its chapters".into();
+                Action::None
+            } else if permitted {
                 chosen
             } else {
                 app.status = "Player disconnected; reopen controls after reconnecting".into();
