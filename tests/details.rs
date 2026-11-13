@@ -266,3 +266,13 @@ fn a_long_list_fact_is_capped_as_a_whole() {
     assert_eq!(value.chars().count(), 300);
     assert!(value.ends_with('…'));
 }
+
+#[test]
+fn wide_characters_wrap_whole_at_odd_widths() {
+    // 1,000 two-column characters in 69 columns: 34 fit a row, one column
+    // stays empty, so 30 rows. Splitting the width evenly counted 29.
+    assert_eq!(details::wrapped(&"長".repeat(1000), 69), 30);
+    assert_eq!(details::wrapped(&"長".repeat(1000), 70), 29);
+    assert_eq!(details::wrapped("one two three", 7), 2);
+    assert_eq!(details::wrapped("", 10), 1);
+}
