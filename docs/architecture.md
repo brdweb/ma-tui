@@ -90,6 +90,11 @@ appears as a `universal_player` wrapping the Sendspin endpoint, which MA-TUI
 already resolves through `output_protocols`, and a paused Sendspin queue
 reports `idle`, not `paused`. Null output does not prove audible playback.
 
+The same checks then ran on the maintainer's own server (2.10.4, schema 65),
+on MA-TUI's existing player only, with the same tones served from the
+checking machine. 0.3.8 and 0.3.7 both passed every check, and the player's
+volume and mute were put back with its queue left stopped afterwards.
+
 A first version of the harness spawned the monitor through ALSA's pipe
 output, so every stream open waited for a new process. After a seek that
 stalled the audio worker long enough for the server's burst to overflow its
