@@ -158,9 +158,9 @@ fn a_favourite_update_becomes_a_library_item_change() {
                                    "favorite":favorite,"user_id":"u1"}});
         assert_eq!(
             translate(&event),
-            Some(Event::MediaItem {
+            Some(Event::Favorite {
                 uri: "library://track/1".into(),
-                item: Some(json!({ "favorite": expected })),
+                favorite: expected,
             })
         );
     }
@@ -225,4 +225,91 @@ fn only_true_is_a_favourite_row() {
         );
         assert_eq!(row.favorite, expected, "{value}");
     }
+}
+
+/// A server answering every command with `item`.
+async fn item_server(item: Value) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let item = item.clone();
+            tokio::spawn(async move {
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0; 4096];
+                    let read = socket.read(&mut chunk).await.unwrap_or(0);
+                    if read == 0 {
+                        return;
+                    }
+                    bytes.extend_from_slice(&chunk[..read]);
+                    let text = String::from_utf8_lossy(&bytes).to_string();
+                    if let Some((_, body)) = text.split_once("\r\n\r\n") {
+                        if serde_json::from_str::<Value>(body).is_ok() {
+                            break;
+                        }
+                    }
+                }
+                let body = item.to_string();
+                let _ = socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+            });
+        }
+    });
+    url
+}
+
+/// The 2.11 event names the library item; a row shown under a provider's URI
+/// changes once the library item's mappings are read.
+#[tokio::test]
+async fn a_favourite_change_reaches_rows_under_a_provider_uri() {
+    let url = item_server(json!({"uri":"library://track/1","item_id":"1","provider":"library",
+        "provider_mappings":[{"item_id":"abc","provider_domain":"spotify","provider_instance":"spotify--x"}]}))
+    .await;
+    let api = ApiClient::new(&url, "fixture-token").unwrap();
+    let provider_row = || {
+        Media::parse(
+            &json!({"name":"Song","item_id":"abc","provider":"spotify--x",
+                    "uri":"spotify://track/abc","media_type":"track","favorite":false}),
+            "track",
+        )
+    };
+    let mut app = App::default();
+    app.music.page.items = vec![provider_row()];
+    app.results = vec![TrackView {
+        media: Some(provider_row()),
+        ..Default::default()
+    }];
+    // The event alone, by library URI, cannot find the row.
+    apply(
+        &mut app,
+        Update::MediaItem {
+            uri: "library://track/1".into(),
+            item: Some(json!({"favorite": true})),
+        },
+    );
+    assert!(!app.music.page.items[0].favorite);
+    let update = ma_tui::controller::favorite_with_mappings(&api, "library://track/1", true)
+        .await
+        .expect("the item has mappings");
+    apply(&mut app, update);
+    assert!(app.music.page.items[0].favorite);
+    assert!(app.results[0].media.as_ref().unwrap().favorite);
+
+    // No mappings, or a failed read: nothing more to apply.
+    let bare = item_server(json!({"uri":"library://track/2"})).await;
+    let api = ApiClient::new(&bare, "fixture-token").unwrap();
+    assert!(
+        ma_tui::controller::favorite_with_mappings(&api, "library://track/2", true)
+            .await
+            .is_none()
+    );
 }
