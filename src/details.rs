@@ -39,6 +39,12 @@ pub struct Details {
     pub error: String,
     /// First wrapped row shown.
     pub scroll: u16,
+    /// The episode's provider id and provider, when it says it has a
+    /// transcript (`metadata.has_transcript`, 2.11.0b3 and later).
+    pub transcript_source: Option<(String, String)>,
+    pub transcript: Option<crate::transcript::Transcript>,
+    /// Whether the transcript is shown in place of the details.
+    pub showing_transcript: bool,
 }
 
 impl Details {
@@ -63,6 +69,16 @@ impl Details {
             item["metadata"]["description"].as_str().unwrap_or_default(),
             DESCRIPTION_LIMIT,
         );
+        self.transcript_source = (item["metadata"]["has_transcript"] == true)
+            .then(|| {
+                let id = item["item_id"].as_str().filter(|id| !id.is_empty())?;
+                let provider = item["provider"].as_str().filter(|p| !p.is_empty())?;
+                Some((id.to_owned(), provider.to_owned()))
+            })
+            .flatten();
+        if self.transcript_source.is_some() {
+            self.facts.push(("Transcript", "press t to read".into()));
+        }
         self.loading = false;
         self.error.clear();
     }
@@ -209,6 +225,27 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
         }
         KeyCode::PageUp => details.scroll = details.scroll.saturating_sub(10),
         KeyCode::Home => details.scroll = 0,
+        KeyCode::Char('t') => {
+            let Some((item_id, provider)) = details.transcript_source.clone() else {
+                app.status = "No transcript for this item".into();
+                return Action::None;
+            };
+            details.showing_transcript = !details.showing_transcript;
+            details.scroll = 0;
+            // Read once; switching back and forth costs nothing after that.
+            let failed = matches!(
+                details.transcript,
+                Some(crate::transcript::Transcript::Failed(_))
+            );
+            if details.showing_transcript && (details.transcript.is_none() || failed) {
+                details.transcript = Some(crate::transcript::Transcript::Loading);
+                return Action::LoadTranscript {
+                    uri: details.uri.clone(),
+                    item_id,
+                    provider,
+                };
+            }
+        }
         _ => {}
     }
     Action::None
@@ -253,11 +290,21 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let Some(details) = &mut app.details else {
         return;
     };
-    let area = crate::ui::heading(frame, area, palette, "DETAILS", true);
+    let label = if details.showing_transcript {
+        "DETAILS · TRANSCRIPT"
+    } else {
+        "DETAILS"
+    };
+    let area = crate::ui::heading(frame, area, palette, label, true);
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
     let dim = Style::default().fg(palette.secondary);
     frame.render_widget(
-        Paragraph::new("↑↓ scroll · PgUp/PgDn page · Esc returns").style(dim),
+        Paragraph::new(if details.transcript_source.is_some() {
+            "↑↓ scroll · PgUp/PgDn page · t transcript/details · Esc returns"
+        } else {
+            "↑↓ scroll · PgUp/PgDn page · Esc returns"
+        })
+        .style(dim),
         rows[0],
     );
     let mut lines = vec![
@@ -273,7 +320,34 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(value.clone()),
         ]));
     }
-    if details.loading {
+    if details.showing_transcript {
+        use crate::transcript::Transcript;
+        lines.truncate(2);
+        match &details.transcript {
+            Some(Transcript::Text { body, truncated }) => {
+                if *truncated {
+                    lines.push(Line::styled(
+                        format!(
+                            "Transcript shortened to its first {} characters",
+                            crate::transcript::LIMIT
+                        ),
+                        dim,
+                    ));
+                    lines.push(Line::default());
+                }
+                lines.extend(body.lines().map(|text| Line::raw(text.to_owned())));
+            }
+            Some(Transcript::Missing) => {
+                lines.push(Line::styled("This episode has no transcript", dim))
+            }
+            Some(Transcript::Failed(error)) => lines.push(Line::raw(format!(
+                "Could not load the transcript: {error} (press t twice to retry)"
+            ))),
+            Some(Transcript::Loading) | None => {
+                lines.push(Line::styled("Loading transcript…", dim))
+            }
+        }
+    } else if details.loading {
         lines.push(Line::styled("Loading details…", dim));
     } else if !details.error.is_empty() {
         lines.push(Line::raw(format!(

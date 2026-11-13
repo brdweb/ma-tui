@@ -50,6 +50,11 @@ pub enum Update {
         uri: String,
         result: Result<serde_json::Value, String>,
     },
+    /// An episode's transcript, answering LoadTranscript for `uri`.
+    Transcript {
+        uri: String,
+        result: Result<serde_json::Value, String>,
+    },
     Notice(String),
 }
 
@@ -275,6 +280,7 @@ impl Controller {
                                     | Action::LoadPlaylists { .. }
                                     | Action::LoadChapters { .. }
                                     | Action::LoadDetails { .. }
+                                    | Action::LoadTranscript { .. }
                             )
                         {
                             let _ = tx.send(Update::Notice("Command expired; press the key again".into())).await;
@@ -301,6 +307,23 @@ impl Controller {
                             playlists.replace(tokio::spawn(async move {
                                 let result = api.editable_playlists().await.map_err(|e| e.to_string());
                                 let _ = tx.send(Update::Playlists { uri, result }).await;
+                            }));
+                            continue;
+                        }
+                        if let Action::LoadTranscript { uri, item_id, provider } = command.action {
+                            let (api, tx) = (api.clone(), tx.clone());
+                            playlists.replace(tokio::spawn(async move {
+                                let result = api
+                                    .command(
+                                        "music/podcasts/podcast_episode_transcript",
+                                        serde_json::json!({
+                                            "item_id": item_id,
+                                            "provider_instance_id_or_domain": provider,
+                                        }),
+                                    )
+                                    .await
+                                    .map_err(|e| e.to_string());
+                                let _ = tx.send(Update::Transcript { uri, result }).await;
                             }));
                             continue;
                         }

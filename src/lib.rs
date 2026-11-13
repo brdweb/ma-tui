@@ -17,5 +17,6 @@ pub mod settings;
 pub mod terminal_ui;
 pub mod text;
 pub mod theme;
+pub mod transcript;
 pub mod ui;
 pub mod visualizer;

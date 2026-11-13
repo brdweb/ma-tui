@@ -82,6 +82,12 @@ pub enum Action {
         uri: String,
         title: String,
     },
+    /// Read an episode's transcript for the open details pane.
+    LoadTranscript {
+        uri: String,
+        item_id: String,
+        provider: String,
+    },
     /// Read an audiobook's chapters, for the chapter picker.
     LoadChapters {
         uri: String,
@@ -108,6 +114,7 @@ impl Action {
                 | Action::CreatePlaylist { .. }
                 | Action::LoadChapters { .. }
                 | Action::LoadDetails { .. }
+                | Action::LoadTranscript { .. }
         )
     }
 }
