@@ -448,12 +448,20 @@ impl ApiClient {
         Ok(())
     }
 
+    /// The full item behind a URI. Listings and queue items can be slim
+    /// summaries; this is the one that carries everything, chapters included.
+    pub async fn item(&self, uri: &str) -> Result<Value> {
+        if uri.is_empty() {
+            return Err(anyhow!("No item to look up"));
+        }
+        self.command("music/item_by_uri", json!({ "uri": uri }))
+            .await
+    }
+
     // `music/item_by_uri` calls `get_item` (music.py:1088-1099), whose
     // resolver prefers a library row when one exists (base.py:597-616).
     async fn library_item_id(&self, uri: &str) -> Result<String> {
-        let item = self
-            .command("music/item_by_uri", json!({"uri":uri}))
-            .await?;
+        let item = self.item(uri).await?;
         if item["provider"].as_str() != Some("library") {
             return Err(anyhow!("This item is not in your library"));
         }

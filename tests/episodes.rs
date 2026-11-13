@@ -274,3 +274,33 @@ async fn one_failed_show_is_reported_on_both_paths() {
         );
     }
 }
+
+/// The same on a server that pages: the shelf follows a show's pages past a
+/// run of finished episodes, and a show can fill more than one page of it.
+#[tokio::test]
+async fn the_unplayed_shelf_follows_a_shows_pages() {
+    let episodes: Vec<Value> = show(150)
+        .into_iter()
+        .map(|mut episode| {
+            let position = episode["position"].as_u64().unwrap();
+            episode["fully_played"] = json!(position > 30);
+            episode
+        })
+        .collect();
+    let (url, _) = server(Some(101), episodes).await;
+    let api = ApiClient::new(&url, "fixture-token").unwrap();
+    api.refresh_schema().await.unwrap();
+    let (items, _) = api.browse(&Target::UnplayedEpisodes).await.unwrap();
+    assert_eq!(items.len(), 30);
+    assert_eq!(items[0].title, "Episode 30");
+
+    // 200 unfinished episodes in one show: more than one page, all kept.
+    for schema in [None, Some(101)] {
+        let (url, _) = server(schema, show(400)).await;
+        let api = ApiClient::new(&url, "fixture-token").unwrap();
+        api.refresh_schema().await.unwrap();
+        let (items, _) = api.browse(&Target::UnplayedEpisodes).await.unwrap();
+        assert_eq!(items.len(), 200, "schema {schema:?}");
+        assert_eq!(items[0].title, "Episode 399");
+    }
+}

@@ -337,6 +337,33 @@ Sources: `controllers/music/controller.py`, `controllers/music/media/base.py`,
 `media/podcasts.py` and `media/audiobooks.py` at server tag 2.10.2, and
 `media_items/media_item.py` in music-assistant/models.
 
+## Chapters (2026-11-12)
+
+A chapter is `{position, name, start, end}` on the media item's
+`metadata.chapters`, with times in seconds and `end` nullable. Audiobookshelf
+fills it for books and episodes, Spotify for books, and the Podcast Feed,
+gPodder and Podcast Index providers fetch Podcasting 2.0 `podcast:chapters` —
+but only on the single-episode path, never while listing a show. Library
+listings are slim summaries without chapters, and a queue item started from a
+listing may lack them too.
+
+So `chapters::source` reads the queue's playing item first, and only when an
+audiobook or episode arrives without chapters does the controller fetch the
+full item once with `music/item_by_uri`, which reaches that single-episode
+path. Like the cover, the fetch happens when the playing item changes and a
+superseded one is cancelled. Other media types never cost a request.
+
+The result is sent after the queue snapshot naming the item and is kept in
+`App` with the item's URI. `Chapters::current` hands it out only while that
+URI is still the one playing, so a slow fetch for the previous item can never
+label the next. Names are untrusted: control characters are stripped and the
+length capped. A chapter without a finite, non-negative start is dropped, the
+rest sorted by start, and no usable chapters simply means none.
+
+Sources: `music_assistant_models/media_items/metadata.py` (`MediaItemChapter`),
+`controllers/music/media/audiobooks.py` and the podcast providers at server
+tags 2.10.5 and 2.10.9.
+
 ## Player-first layout (2026-09-16)
 
 The focused pane is marked by filling its heading rather than enlarging it: a

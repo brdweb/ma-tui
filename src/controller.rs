@@ -23,6 +23,12 @@ pub enum Update {
     },
     /// The cover for what is playing, or none when there is not one.
     Artwork(Option<crate::artwork::Art>),
+    /// The chapters of the item at `uri`, which may have stopped playing by
+    /// the time this arrives.
+    Chapters {
+        uri: String,
+        chapters: Vec<crate::chapters::Chapter>,
+    },
     Offline(String),
     Search(String, Result<Vec<Track>, String>),
     Browse(
@@ -70,6 +76,29 @@ impl Pending {
             previous.abort();
         }
     }
+    fn cancel(&mut self) {
+        if let Some(previous) = self.0.take() {
+            previous.abort();
+        }
+    }
+    fn finished(&self) -> bool {
+        self.0.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+}
+
+/// A favourite change applied to the rows showing the item under any of its
+/// provider URIs. The 2.11 event names only the library item, so its mappings
+/// are read; `None` when that read fails or the item has none.
+pub async fn favorite_with_mappings(api: &ApiClient, uri: &str, favorite: bool) -> Option<Update> {
+    let item = api.item(uri).await.ok()?;
+    let mappings = item["provider_mappings"]
+        .as_array()
+        .filter(|mappings| !mappings.is_empty())?
+        .clone();
+    Some(Update::MediaItem {
+        uri: uri.to_owned(),
+        item: Some(serde_json::json!({ "favorite": favorite, "provider_mappings": mappings })),
+    })
 }
 
 impl Drop for Pending {
@@ -143,6 +172,10 @@ impl Controller {
             // The cover only changes when the item does, so it is fetched then
             // rather than on every queue read.
             let (mut covering, mut cover) = (Pending::default(), String::new());
+            // Chapters likewise belong to the item, not to the snapshot.
+            let (mut chaptering, mut chaptered) = (Pending::default(), String::new());
+            // One mapping lookup per item; a newer change for it replaces the older.
+            let mut favoriting: std::collections::HashMap<String, Pending> = Default::default();
             loop {
                 let mut stale = Stale::all();
                 tokio::select! {
@@ -201,6 +234,21 @@ impl Controller {
                                     if tx.send(Update::MediaItem { uri, item }).await.is_err() {
                                         return;
                                     }
+                                }
+                                // Rows under the library URI change at once;
+                                // provider rows once the mappings are read.
+                                Event::Favorite { uri, favorite } => {
+                                    let item = Some(serde_json::json!({ "favorite": favorite }));
+                                    if tx.send(Update::MediaItem { uri: uri.clone(), item }).await.is_err() {
+                                        return;
+                                    }
+                                    favoriting.retain(|_, task| !task.finished());
+                                    let (api, tx) = (api.clone(), tx.clone());
+                                    favoriting.entry(uri.clone()).or_default().replace(tokio::spawn(async move {
+                                        if let Some(update) = favorite_with_mappings(&api, &uri, favorite).await {
+                                            let _ = tx.send(update).await;
+                                        }
+                                    }));
                                 }
                             }
                             next = events.as_mut().and_then(|rx| rx.try_recv().ok());
@@ -306,8 +354,37 @@ impl Controller {
                             }));
                         }
                     }
+                    let chapters = queue
+                        .as_ref()
+                        .ok()
+                        .map(|q| crate::chapters::source(&q.details))
+                        .filter(|(uri, _)| *uri != chaptered);
                     if tx.send(Update::Queue(id, queue)).await.is_err() {
                         break;
+                    }
+                    // Sent after the snapshot naming the item, so the interface
+                    // knows which item these belong to when they arrive.
+                    if let Some((uri, source)) = chapters {
+                        chaptered = uri.clone();
+                        match source {
+                            crate::chapters::Source::Known(chapters) => {
+                                chaptering.cancel();
+                                if tx.send(Update::Chapters { uri, chapters }).await.is_err() {
+                                    break;
+                                }
+                            }
+                            crate::chapters::Source::Fetch => {
+                                let (api, tx) = (api.clone(), tx.clone());
+                                chaptering.replace(tokio::spawn(async move {
+                                    let chapters = api
+                                        .item(&uri)
+                                        .await
+                                        .map(|item| crate::chapters::parse(&item))
+                                        .unwrap_or_default();
+                                    let _ = tx.send(Update::Chapters { uri, chapters }).await;
+                                }));
+                            }
+                        }
                     }
                 }
             }
