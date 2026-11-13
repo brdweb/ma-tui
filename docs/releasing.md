@@ -1,7 +1,7 @@
 # Releases
 
 Releases require explicit user authorization. The latest stable release is
-`v1.1.1`, targeting Music Assistant 2.10.5; the previous release is `v1.1.0`.
+`v1.2.0`, targeting Music Assistant 2.10.9; the previous release is `v1.1.1`.
 `v0.9.0` was the first as ma-tui. `v0.1.0-beta.2` was
 published as local-matui before the rename, and `v0.1.0-beta.1` under that same
 former name and withdrawn the same day; its tag and assets were deleted rather
@@ -118,6 +118,49 @@ all 402 external registry packages from the v1.1.0 lockfile fixed the build.
 [PR #191](https://github.com/outcrop-labs/omapak/pull/191) then passed its real
 Flatpak build and received an “accept” recommendation. This is why vendor
 regeneration and upstream build/report verification are mandatory release steps.
+
+## 1.2.0 publication (2026-11-13)
+
+- Published [v1.2.0](https://github.com/brdweb/ma-tui/releases/tag/v1.2.0)
+  as stable/latest at 13:25:46 UTC, with six assets: native archive, source
+  archive, Arch package, Flatpak bundle, `BUILDINFO.json` and `SHA256SUMS`.
+  The maintainer authorized publication, the Flatpak verifier and the Omapak
+  update.
+- The annotated tag resolves to `e16911415f4012e012bc0544104228f29979b99f`,
+  source tree `91698b6c94e9b6c4f1d9aae020440d7b4ce636d2`.
+  [Main CI run 43432141060](https://github.com/brdweb/ma-tui/actions/runs/43432141060)
+  passed the quality gates and RustSec audit and built the release artifact
+  (rustc 1.100.0). Every package used that artifact through `MA_TUI_CI_BUILD`.
+- Final native executable SHA256:
+  `e4b375362b890b08585828c4e5ece710125f1fb3956c10cf23e03bfb61950b92`;
+  minimum glibc 2.39. In Ubuntu 24.04 it passed the terminal (quit and
+  SIGTERM), connected-controller, password-settings and token-settings PTY
+  fixtures.
+- Arch staging ran on the host with the CI artifact. The disposable
+  `archlinux:base` container passed install, integrity, startup, PTY, HTTP
+  fixtures and uninstall (`ARCH PACKAGE VERIFIED`). The package SHA256 is
+  `a7ac30b4ca7efcfb5f7b28862db6885954ec0a998fe0d442780b36bf09c31b56`.
+- The Flatpak was built and verified in the disposable Ubuntu 24.04 container
+  described in `packaging/flatpak/README.md`, with private buses, a throwaway
+  keyring and a null sink. It reached `FLATPAK VERIFIED` (installed identity,
+  sandbox, keyring, PTY, controller, silent audio). Bundle SHA256:
+  `3edfa593b31c447c34e054b85eec7ae5902a0bda6219e4d0b029ff03241fe95d`.
+- `packaging/release.py` bundled the assets in Ubuntu 24.04 from the clean
+  release commit. After publication all six hosted assets were downloaded:
+  every `SHA256SUMS` entry passed, the native and Arch executables matched the
+  CI hash, the source archive's `Cargo.lock` matched and it holds no `.git`
+  or `.tools`, and the downloaded executable reported `ma-tui 1.2.0` and
+  rendered its demo in Ubuntu 24.04.
+- Omapak: [outcrop-labs/omapak#312](https://github.com/outcrop-labs/omapak/pull/312)
+  pins `v1.2.0` and that commit, with `cargo-sources.json` regenerated from
+  the tag's lockfile (391 registry crates). A fresh offline build from only
+  those vendored sources succeeded and ran its demo. Omapak's real Flatpak
+  `static-build` compiled `ma-tui v1.2.0` and passed, and its judge report
+  recommended "accept". The PR still needs an Omapak maintainer's merge, so
+  the catalog update is not yet published.
+- Limits as in the release notes: null-sink audio only, 2.11 features checked
+  against fixtures and a disposable 2.11.0b8 server, assets unsigned and not
+  reproducible-build attestations.
 
 ## 1.2.0 preparation (2026-11-13)
 
