@@ -353,3 +353,25 @@ async fn the_chapter_picker_reads_the_full_item() {
     assert_eq!(lookups.load(Ordering::SeqCst), 2);
     controller.shutdown().await;
 }
+
+#[test]
+fn a_fetch_landing_while_the_queue_is_unknown_is_kept_for_that_item() {
+    // The queue read failed (or was cleared) while the fetch was out. The
+    // controller does not fetch the same item again, so dropping the result
+    // here would leave the book without chapters until the item changed.
+    let mut app = App::default();
+    showing(&mut app, "x://book/1");
+    app.queue_details = Value::Null;
+    apply(
+        &mut app,
+        Update::Chapters {
+            uri: "x://book/1".into(),
+            chapters: vec![chapter(1, "One", 0.0, None)],
+        },
+    );
+    showing(&mut app, "x://book/1");
+    assert_eq!(app.chapters.current(&app.queue_details).len(), 1);
+    // It is still never read for a different item.
+    showing(&mut app, "x://book/2");
+    assert!(app.chapters.current(&app.queue_details).is_empty());
+}

@@ -62,6 +62,7 @@ fn only_an_audiobook_offers_chapters_in_its_item_menu() {
 #[test]
 fn loaded_chapters_open_a_picker_of_numbered_chapters() {
     let mut app = connected();
+    app.chapter_picker = Some("library://audiobook/7".into());
     let chapter = |position, name: &str, start| Chapter {
         position,
         name: name.into(),
@@ -96,6 +97,7 @@ fn loaded_chapters_open_a_picker_of_numbered_chapters() {
 #[test]
 fn a_book_without_chapters_or_a_failed_read_says_so() {
     let mut app = connected();
+    app.chapter_picker = Some("u".into());
     apply(
         &mut app,
         Update::ChapterList {
@@ -106,6 +108,7 @@ fn a_book_without_chapters_or_a_failed_read_says_so() {
     assert!(app.menu.is_none());
     assert_eq!(app.status, "This audiobook has no chapters to start from");
 
+    app.chapter_picker = Some("u".into());
     apply(
         &mut app,
         Update::ChapterList {
@@ -118,4 +121,56 @@ fn a_book_without_chapters_or_a_failed_read_says_so() {
         app.status,
         "Could not load chapters: Music Assistant HTTP 500"
     );
+}
+
+#[test]
+fn a_late_picker_never_replaces_another_menu_or_answers_another_book() {
+    let chapters = || {
+        Ok(vec![Chapter {
+            position: Some(1),
+            name: "One".into(),
+            start: 0.0,
+            end: None,
+        }])
+    };
+    // Asked for one book, then the answer for another arrives.
+    let mut app = connected();
+    app.chapter_picker = Some("library://audiobook/1".into());
+    apply(
+        &mut app,
+        Update::ChapterList {
+            uri: "library://audiobook/2".into(),
+            result: chapters(),
+        },
+    );
+    assert!(app.menu.is_none());
+
+    // The user opened the controls menu while the read was out.
+    let mut app = connected();
+    app.chapter_picker = Some("library://audiobook/1".into());
+    app.key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('?'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+    let title = app.menu.as_ref().map(|menu| menu.title.clone());
+    assert!(title.is_some());
+    apply(
+        &mut app,
+        Update::ChapterList {
+            uri: "library://audiobook/1".into(),
+            result: chapters(),
+        },
+    );
+    assert_eq!(app.menu.as_ref().map(|menu| menu.title.clone()), title);
+
+    // Nothing was asked for at all.
+    let mut app = connected();
+    apply(
+        &mut app,
+        Update::ChapterList {
+            uri: "library://audiobook/1".into(),
+            result: chapters(),
+        },
+    );
+    assert!(app.menu.is_none());
 }

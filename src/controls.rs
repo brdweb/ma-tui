@@ -795,6 +795,9 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
                 return Action::None;
             }
             app.menu = None;
+            if let Action::LoadChapters { uri } = &action {
+                app.chapter_picker = Some(uri.clone());
+            }
             // Show the new position at once, as the seek keys do.
             if let Action::Seek(position) = action {
                 return app.seek_to(position);
