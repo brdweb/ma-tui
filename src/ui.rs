@@ -685,6 +685,9 @@ pub struct App {
     /// Bumped whenever the cover changes, so a renderer that writes outside the
     /// cell grid knows when what it drew is stale.
     pub artwork_generation: u64,
+    /// Chapters of the playing item, named by its URI. Read them through
+    /// `Chapters::current`, which hides a list loaded for another item.
+    pub chapters: crate::chapters::Chapters,
     /// Draw covers as sixel rather than half blocks.
     pub sixel: bool,
     /// Where the cover was laid out this frame, for a renderer that has to
@@ -736,6 +739,7 @@ impl Default for App {
             tick: 0,
             artwork: None,
             artwork_generation: 0,
+            chapters: crate::chapters::Chapters::default(),
             sixel: false,
             artwork_area: None,
             spectrum_style: crate::config::Spectrum::default(),
