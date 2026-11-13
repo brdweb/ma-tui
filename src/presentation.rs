@@ -555,6 +555,13 @@ pub fn not_sent(app: &mut App, action: &Action) {
                 details.error = "Busy: details not loaded; close and try again".into();
             }
         }
+        Action::LoadTranscript { uri, .. } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == *uri) {
+                details.transcript = Some(crate::transcript::Transcript::Failed(
+                    "Busy: press t twice to try again".into(),
+                ));
+            }
+        }
         _ => {}
     }
 }

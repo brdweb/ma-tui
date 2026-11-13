@@ -190,3 +190,30 @@ fn the_transcript_draws_in_the_pane() {
         }
     }
 }
+
+#[test]
+fn a_markup_heavy_transcript_cut_at_the_byte_cap_says_so() {
+    // The sanitiser stops at its byte cap long before LIMIT characters here,
+    // so the length alone cannot tell that the text was cut.
+    let heavy = "<span class=\"cue\">w</span> ".repeat(LIMIT);
+    let Transcript::Text { truncated, .. } = Transcript::parse(&json!([heavy])) else {
+        panic!("a transcript");
+    };
+    assert!(truncated);
+}
+
+#[test]
+fn a_transcript_read_that_could_not_be_sent_can_be_retried() {
+    let mut app = episode_pane(true);
+    let action = key(&mut app, KeyCode::Char('t'));
+    ma_tui::presentation::not_sent(&mut app, &action);
+    assert!(matches!(
+        app.details.as_ref().unwrap().transcript,
+        Some(Transcript::Failed(_))
+    ));
+    key(&mut app, KeyCode::Char('t'));
+    assert!(matches!(
+        key(&mut app, KeyCode::Char('t')),
+        Action::LoadTranscript { .. }
+    ));
+}

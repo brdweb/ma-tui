@@ -31,27 +31,26 @@ impl Transcript {
         let text = value[0].as_str().filter(|text| !text.trim().is_empty());
         // Cues are cleaned one by one; cleaning the joined lines again could
         // read a decoded `<` as markup and flatten them.
-        let body = match text {
-            Some(text) => crate::text::plain(text, LIMIT),
+        let (body, truncated) = match text {
+            Some(text) => crate::text::plain_cut(text, LIMIT),
             None => cap(cues(&value[1])),
         };
         if body.trim().is_empty() {
             return Self::Missing;
         }
-        // `plain` ends a cut text with an ellipsis at exactly the limit.
-        let truncated = body.chars().count() == LIMIT && body.ends_with('…');
         Self::Text { body, truncated }
     }
 }
 
-/// At most `LIMIT` characters, ending in `…` when cut, as `text::plain` does.
-fn cap(text: String) -> String {
+/// At most `LIMIT` characters, ending in `…` when cut, as `text::plain` does,
+/// and whether it was cut.
+fn cap(text: String) -> (String, bool) {
     if text.chars().count() <= LIMIT {
-        return text;
+        return (text, false);
     }
     let mut cut: String = text.chars().take(LIMIT - 1).collect();
     cut.push('…');
-    cut
+    (cut, true)
 }
 
 /// Cues as one line each, with the speaker when the source names one.
