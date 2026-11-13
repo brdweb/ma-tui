@@ -25,6 +25,15 @@ fn show(count: u64) -> Vec<Value> {
 /// 2.11.0b8: newest first by position, `limit` defaulting to 500 and 0 meaning
 /// all. Without one it behaves like 2.10.x and ignores the paging arguments.
 async fn server(schema: Option<u32>, episodes: Vec<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
+    serve(schema, episodes, false).await
+}
+
+/// `server`, optionally with a second show whose episode read fails.
+async fn serve(
+    schema: Option<u32>,
+    episodes: Vec<Value>,
+    broken_show: bool,
+) -> (String, Arc<Mutex<Vec<Value>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let calls = Arc::new(Mutex::new(Vec::new()));
@@ -60,13 +69,27 @@ async fn server(schema: Option<u32>, episodes: Vec<Value>) -> (String, Arc<Mutex
                     seen.lock().unwrap().push(request.clone());
                     let args = &request["args"];
                     match request["command"].as_str().unwrap() {
+                        "music/podcasts/library_items" if broken_show => json!([
+                            {"item_id":"s1","provider":"feed","name":"Show","media_type":"podcast"},
+                            {"item_id":"broken","provider":"feed","name":"Broken","media_type":"podcast"}
+                        ]),
                         "music/podcasts/library_items" => json!([
                             {"item_id":"s1","provider":"feed","name":"Show","media_type":"podcast"}
                         ]),
+                        "music/podcasts/podcast_episodes" if args["item_id"] == "broken" => {
+                            return;
+                        }
                         "music/podcasts/podcast_episodes" if schema.is_some() => {
                             let limit = args["limit"].as_u64().unwrap_or(500) as usize;
                             let offset = args["offset"].as_u64().unwrap_or(0) as usize;
-                            let page = episodes.iter().skip(offset);
+                            // fully_played filters before paging, as on 2.11.0b8.
+                            let wanted = args["fully_played"].as_bool();
+                            let page = episodes
+                                .iter()
+                                .filter(|e| {
+                                    wanted.is_none_or(|w| (e["fully_played"] == true) == w)
+                                })
+                                .skip(offset);
                             let page: Vec<&Value> = if limit == 0 {
                                 page.collect()
                             } else {
@@ -196,6 +219,60 @@ async fn older_unplayed_episodes_are_found_past_the_first_page() {
     let (items, _) = api.browse(&Target::UnplayedEpisodes).await.unwrap();
     assert_eq!(items.len(), 30);
     assert_eq!(items[0].title, "Episode 30");
+}
+
+/// Every newest episode played, older ones not: the server's own filter must
+/// find them, where reading the newest page and filtering here would not.
+#[tokio::test]
+async fn a_paging_server_filters_unplayed_episodes_itself() {
+    let episodes: Vec<Value> = show(150)
+        .into_iter()
+        .map(|mut episode| {
+            let position = episode["position"].as_u64().unwrap();
+            episode["fully_played"] = json!(position > 30);
+            episode
+        })
+        .collect();
+    let (url, calls) = server(Some(101), episodes.clone()).await;
+    let api = ApiClient::new(&url, "fixture-token").unwrap();
+    api.refresh_schema().await.unwrap();
+    let (items, _) = api.browse(&Target::UnplayedEpisodes).await.unwrap();
+    assert_eq!(items.len(), 30);
+    assert_eq!(items[0].title, "Episode 30");
+    {
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls[1]["args"]["fully_played"], false);
+        assert_eq!(calls[1]["args"]["limit"], 100);
+    }
+
+    // An older server is asked for everything and filtered here.
+    let (url, calls) = server(None, episodes).await;
+    let api = ApiClient::new(&url, "fixture-token").unwrap();
+    api.refresh_schema().await.unwrap();
+    let (items, _) = api.browse(&Target::UnplayedEpisodes).await.unwrap();
+    assert_eq!(items.len(), 30);
+    assert_eq!(items[0].title, "Episode 30");
+    assert!(calls.lock().unwrap()[1]["args"]
+        .get("fully_played")
+        .is_none());
+}
+
+#[tokio::test]
+async fn one_failed_show_is_reported_on_both_paths() {
+    for schema in [None, Some(101)] {
+        let (url, _) = serve(schema, show(4), true).await;
+        let api = ApiClient::new(&url, "fixture-token").unwrap();
+        api.refresh_schema().await.unwrap();
+        let error = api
+            .browse(&Target::UnplayedEpisodes)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("could not load episodes for 1 of 2 shows"),
+            "schema {schema:?}: {error}"
+        );
+    }
 }
 
 /// The same on a server that pages: the shelf follows a show's pages past a
