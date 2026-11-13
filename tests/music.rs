@@ -1232,3 +1232,73 @@ fn a_row_names_the_show_the_album_or_the_author_but_never_a_provider_id() {
     assert_eq!(bare.detail, "podcast episode");
     assert!(!bare.detail.contains("zdGFJfeu"));
 }
+
+/// An episode row says when it came out, beside the show and before any
+/// listening progress; anything that is not a date is left out.
+#[test]
+fn episode_rows_show_the_publish_date_when_known() {
+    let episode = |metadata: serde_json::Value| {
+        Media::parse(
+            &json!({"name":"Episode 1","item_id":"e1","provider":"podcast_feed",
+                    "media_type":"podcast_episode","uri":"podcast_feed://podcast_episode/e1",
+                    "podcast":{"name":"Fixture Show"},"resume_position_ms":724_000,
+                    "metadata":metadata}),
+            "podcast_episode",
+        )
+        .detail
+    };
+    assert_eq!(
+        episode(json!({"release_date":"2026-10-30T08:00:00+00:00"})),
+        "Fixture Show · 2026-10-30 · resume 12:04"
+    );
+    assert_eq!(episode(json!({})), "Fixture Show · resume 12:04");
+    for malformed in [
+        json!({"release_date":null}),
+        json!({"release_date":1_761_811_200}),
+        json!({"release_date":"yesterday"}),
+        json!({"release_date":"2026-1-30"}),
+        json!({"release_date":"\u{1b}[2J2026-10-30"}),
+    ] {
+        assert_eq!(episode(malformed), "Fixture Show · resume 12:04");
+    }
+
+    // Only episodes: a dated album row keeps its byline alone.
+    let album = Media::parse(
+        &json!({"name":"Album","media_type":"album","artists":[{"name":"Band"}],
+                "metadata":{"release_date":"2020-01-01T00:00:00"}}),
+        "album",
+    );
+    assert_eq!(album.detail, "Band");
+}
+
+/// Publisher numbering appears on an episode row when the server has it
+/// (2.11.0b4+); many feeds number nothing, and older servers send neither.
+#[test]
+fn episode_rows_show_season_and_episode_numbers() {
+    let row = |numbers: serde_json::Value| {
+        let mut item = json!({"name":"Episode","media_type":"podcast_episode",
+                              "uri":"feed://podcast_episode/e","podcast":{"name":"Show"},
+                              "metadata":{"release_date":"2026-10-30T08:00:00+00:00"}});
+        for (key, value) in numbers.as_object().unwrap() {
+            item[key] = value.clone();
+        }
+        Media::parse(&item, "podcast_episode").detail
+    };
+    assert_eq!(
+        row(json!({"season":2,"episode_number":14})),
+        "Show · S2 E14 · 2026-10-30"
+    );
+    assert_eq!(row(json!({"episode_number":14})), "Show · E14 · 2026-10-30");
+    assert_eq!(
+        row(json!({"season":2,"episode_number":null})),
+        "Show · S2 · 2026-10-30"
+    );
+    assert_eq!(row(json!({})), "Show · 2026-10-30");
+    for junk in [json!(0), json!(-3), json!("14"), json!(1.5)] {
+        assert_eq!(
+            row(json!({"season":junk,"episode_number":junk})),
+            "Show · 2026-10-30",
+            "{junk}"
+        );
+    }
+}
