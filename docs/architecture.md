@@ -2,7 +2,7 @@
 
 ## Accepted scope
 
-Rust + Ratatui Linux TUI; Music Assistant 2.10.5 is the current integration
+Rust + Ratatui Linux TUI; Music Assistant 2.10.9 is the current integration
 target. Local playback is included from the first implementation, not a later
 phase. Embed `sendspin = "=0.3.8"`; do not introduce a companion player process.
 Commit Cargo.lock when changes are reviewed. MA-TUI is MIT licensed; third-party
@@ -53,8 +53,8 @@ whose worker cannot finish within two seconds is not reopened concurrently.
 
 ## Versioned integration references
 
-- MA HTTP handler: https://github.com/music-assistant/server/tree/2.10.5/music_assistant/controllers/webserver
-- MA Sendspin authentication: https://github.com/music-assistant/server/blob/2.10.5/music_assistant/controllers/webserver/sendspin_proxy.py
+- MA HTTP handler: https://github.com/music-assistant/server/tree/2.10.9/music_assistant/controllers/webserver
+- MA Sendspin authentication: https://github.com/music-assistant/server/blob/2.10.9/music_assistant/controllers/webserver/sendspin_proxy.py
 - Sendspin 0.3.8: https://github.com/Sendspin/sendspin-rs/tree/v0.3.8
 - Audio output: https://github.com/Sendspin/sendspin-rs/blob/v0.3.8/src/audio/synced_player.rs
 - Desktop integration reference (not a dependency): https://github.com/music-assistant/desktop-app/blob/main/src-tauri/src/sendspin/mod.rs
@@ -70,7 +70,34 @@ WebSocket response envelope. Resolve a selected player's active queue before
 queue commands; volume commands still target the player itself. Submit explicit
 `replace` or `add` options for play-media requests rather than relying on defaults.
 
-### Stable target review (2026-10-09)
+### Stable target review (2026-11-12)
+
+MA-TUI targets stable Music Assistant 2.10.9 (API schema 65, as on 2.10.5).
+Every stable release from 2.10.7 ships `aiosendspin[server]` 10.x: 2.10.9 pins
+10.2.1 with `av` 16.1.0, and the 2.11.0b8 beta pins 10.2.2 with `av` 18.1.0.
+The Rust Sendspin pin moves to 0.3.8 for these servers.
+
+Live check, Sendspin 0.3.8, against disposable 2.10.9 and 2.11.0b8 containers
+on a private network, with synthetic tones served inside the container. Each
+run read `/info` first. Output went to ALSA's null sink through a monitor that
+logs only level and pitch numbers, paced at the rate of a sound card; no
+samples were kept. Both servers passed: authenticated registration, stream
+start, non-silent output at the expected pitch, seek, pause and resume
+(position kept), volume and mute events (level drops, silence while muted), a
+track change (the pitch changes) and reconnect after the relayed sockets were
+dropped. 0.3.7 passed the same runs. On both servers the local speaker
+appears as a `universal_player` wrapping the Sendspin endpoint, which MA-TUI
+already resolves through `output_protocols`, and a paused Sendspin queue
+reports `idle`, not `paused`. Null output does not prove audible playback.
+
+A first version of the harness spawned the monitor through ALSA's pipe
+output, so every stream open waited for a new process. After a seek that
+stalled the audio worker long enough for the server's burst to overflow its
+2 MB encoded queue ("Audio worker queue overflow") on 0.3.7 and 0.3.8 alike.
+With a persistent reader it did not recur, so it is recorded as a harness
+artefact, but it shows the queue has little slack when a stream reopens slowly.
+
+### Stable target review (2026-10-09, 2.10.5)
 
 The 1.1.1 candidate targets stable Music Assistant 2.10.5. Source comparison
 against 2.10.2 found no removed API commands in the reviewed music, playlist,
