@@ -43,9 +43,9 @@ pub enum Target {
         id: String,
         provider: String,
     },
-    /// A podcast's episodes, newest first, a page at a time. MA 2.10.5 has no
-    /// separate audiobook chapter-list API, so this browser treats a book as
-    /// one playable item with a resume point.
+    /// A podcast's episodes, newest first, a page at a time. An audiobook is
+    /// not a folder: it is one playable item, and its chapters come from the
+    /// full item (`crate::chapters`).
     Podcast {
         id: String,
         provider: String,
@@ -950,6 +950,16 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
                 action,
             }),
         );
+        // Only a book: MA 2.10.9 ignores a chapter `start_item` for an episode.
+        if media.kind == "audiobook" && !media.uri.is_empty() {
+            entries.push(crate::controls::Entry {
+                section: "Play this item",
+                label: "Chapters…".into(),
+                action: Action::LoadChapters {
+                    uri: media.uri.clone(),
+                },
+            });
+        }
         if matches!(
             media.kind.as_str(),
             "track" | "album" | "artist" | "playlist"
@@ -1032,6 +1042,7 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
         error: String::new(),
         filter: String::new(),
         filtering: false,
+        item: String::new(),
     });
     Action::None
 }
@@ -1075,6 +1086,7 @@ pub(crate) fn queue_choices(app: &mut App, title: &str, replace: Action, add: Ac
         error: String::new(),
         filter: String::new(),
         filtering: false,
+        item: String::new(),
     });
     Action::None
 }
