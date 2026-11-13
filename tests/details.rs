@@ -225,3 +225,20 @@ fn the_end_of_wide_text_is_reachable() {
         .collect();
     assert!(screen.contains("END"), "the end is reachable");
 }
+
+#[test]
+fn a_details_read_that_could_not_be_sent_stops_loading() {
+    let mut app = connected();
+    app.details = Some(Details::loading("library://podcast/2", "Show"));
+    ma_tui::presentation::not_sent(
+        &mut app,
+        &Action::LoadDetails {
+            uri: "library://podcast/2".into(),
+            title: "Show".into(),
+        },
+    );
+    let pane = app.details.as_ref().unwrap();
+    assert!(!pane.loading, "the pane would say Loading… forever");
+    assert!(!pane.error.is_empty());
+    assert!(app.status.starts_with("Busy"));
+}

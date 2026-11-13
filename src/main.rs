@@ -19,20 +19,11 @@ fn dispatch(
     } else {
         let searching = matches!(action, ui::Action::Search(_));
         let browsing = matches!(action, ui::Action::Browse { .. });
-        if requests
-            .try_send(ma_tui::controller::Request::new(
-                app.selected_id.clone(),
-                action,
-            ))
-            .is_err()
-        {
-            app.status = "Busy: command not sent; try again".into();
-            if browsing {
-                app.music.apply(
-                    app.music.generation,
-                    Err("Busy: press r to retry loading music".into()),
-                );
-            }
+        if let Err(error) = requests.try_send(ma_tui::controller::Request::new(
+            app.selected_id.clone(),
+            action,
+        )) {
+            ma_tui::presentation::not_sent(app, &error.into_inner().action);
         } else if searching {
             app.results.clear();
             app.status = "Searching…".into();
