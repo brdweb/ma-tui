@@ -275,10 +275,20 @@ hydrated per user from the playlog table and falling back to the provider's own
 state. Both are null when the provider does not report progress, which is not
 the same as "not played": nothing is shown then rather than claiming unplayed.
 
-A podcast opens into `music/podcasts/podcast_episodes`. An audiobook does not
-open into a listing: it is one playable item with a resume point, and its
-chapters come from the full item (see Chapters below). Its item menu offers
-**Chapters…** to start at one.
+A podcast opens into `music/podcasts/podcast_episodes`, newest first, a page
+at a time (`[`/`]`). From 2.11.0b6 (schema 99) that command returns one sorted
+page, with `limit` defaulting to 500. Earlier servers ignore the paging
+arguments and return every episode in the provider's order. So a server at
+schema 99 or later is asked for `sort_field: "position"`, `sort_direction:
+"desc"`, `limit` and `offset`. Anything older, or a server whose schema is not
+known yet, is asked for everything (`limit: 0`, which a paging server also
+honours) and paged here. Either way the order comes from each episode's
+`position`, which counts from the oldest (`get_episode_positions`), then from
+its release date, never from arrival order: the 2.10.9 feed provider already
+sends episodes newest first, so reversing them was wrong there too. An
+audiobook does not open into a listing: it is one playable item with a resume
+point, and its chapters come from the full item (see Chapters below). Its item
+menu offers **Chapters…** to start at one.
 
 There is no server-side filter for unplayed episodes: `library_items` takes
 `played_only`, which selects the opposite, and has no unplayed equivalent. The

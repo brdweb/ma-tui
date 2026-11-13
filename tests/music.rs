@@ -983,7 +983,8 @@ fn podcasts_open_into_episodes_and_audiobooks_stay_a_single_item() {
         podcast.open,
         Some(Target::Podcast {
             id: "p1".into(),
-            provider: "audiobookshelf".into()
+            provider: "audiobookshelf".into(),
+            offset: 0
         })
     );
     assert!(podcast.playable, "a podcast can still be played whole");
