@@ -8,6 +8,7 @@ pub mod config;
 pub mod controller;
 pub mod controls;
 pub mod credentials;
+pub mod details;
 pub mod events;
 pub mod mpris;
 pub mod music;

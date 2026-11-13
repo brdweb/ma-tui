@@ -354,6 +354,38 @@ async fn the_chapter_picker_reads_the_full_item() {
     controller.shutdown().await;
 }
 
+#[tokio::test]
+async fn the_details_pane_reads_the_full_item() {
+    let (mut controller, _) = fixture(
+        json!({"uri":"library://audiobook/4","media_type":"audiobook"}),
+        json!({"uri":"library://audiobook/4","name":"Full","metadata":{"description":"Notes"}}),
+    )
+    .await;
+    controller
+        .requests
+        .send(ma_tui::controller::Request::new(
+            None,
+            ma_tui::ui::Action::LoadDetails {
+                uri: "library://audiobook/4".into(),
+                title: "Row".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    let (uri, result) = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(Update::Details { uri, result }) = controller.updates.recv().await {
+                return (uri, result);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(uri, "library://audiobook/4");
+    assert_eq!(result.unwrap()["name"], "Full");
+    controller.shutdown().await;
+}
+
 #[test]
 fn a_fetch_landing_while_the_queue_is_unknown_is_kept_for_that_item() {
     // The queue read failed (or was cleared) while the fetch was out. The

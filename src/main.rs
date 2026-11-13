@@ -19,20 +19,11 @@ fn dispatch(
     } else {
         let searching = matches!(action, ui::Action::Search(_));
         let browsing = matches!(action, ui::Action::Browse { .. });
-        if requests
-            .try_send(ma_tui::controller::Request::new(
-                app.selected_id.clone(),
-                action,
-            ))
-            .is_err()
-        {
-            app.status = "Busy: command not sent; try again".into();
-            if browsing {
-                app.music.apply(
-                    app.music.generation,
-                    Err("Busy: press r to retry loading music".into()),
-                );
-            }
+        if let Err(error) = requests.try_send(ma_tui::controller::Request::new(
+            app.selected_id.clone(),
+            action,
+        )) {
+            ma_tui::presentation::not_sent(app, &error.into_inner().action);
         } else if searching {
             app.results.clear();
             app.status = "Searching…".into();
@@ -131,6 +122,30 @@ async fn main() -> Result<()> {
                         .cloned()
                         .collect();
                     app.status = "Demo search complete (fictional offline data)".into();
+                } else if let ui::Action::LoadDetails { uri, title } = action {
+                    // A fictional item, so the pane can be seen offline.
+                    let item = serde_json::json!({
+                        "name": title,
+                        "duration": 2712,
+                        "podcast": if uri.contains("podcast_episode") { Some("Fictional show") } else { None }.map(|name| serde_json::json!({ "name": name })),
+                        "authors": if uri.contains("audiobook") { vec!["Fictional author"] } else { vec![] },
+                        "metadata": {
+                            "release_date": "2026-11-01T06:00:00+00:00",
+                            "performers": ["Fictional host", "Fictional guest"],
+                            "links": [{"type": "website", "url": "https://example.com/episode"}],
+                            "chapters": [{"position": 1, "name": "Opening", "start": 0}],
+                            "description": "<p>A <b>fictional</b> item for the offline demo.</p>\
+                                <ul><li>No server was asked</li><li>No audio plays</li></ul>\
+                                <p>Show notes arrive as HTML &amp; are shown as plain text.</p>"
+                        }
+                    });
+                    ma_tui::presentation::apply(
+                        app,
+                        ma_tui::controller::Update::Details {
+                            uri,
+                            result: Ok(item),
+                        },
+                    );
                 } else if let ui::Action::LoadChapters { uri } = action {
                     // Fictional chapters, so the picker can be seen offline.
                     let chapters = demo_chapters(&["Opening", "Theme", "Bridge", "Coda"]);

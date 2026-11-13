@@ -807,6 +807,10 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
                 return Action::None;
             }
             app.menu = None;
+            // The pane opens at once; the read fills it in.
+            if let Action::LoadDetails { uri, title } = &action {
+                app.details = Some(crate::details::Details::loading(uri, title));
+            }
             if let Action::LoadChapters { uri } = &action {
                 app.chapter_picker = Some(uri.clone());
             }

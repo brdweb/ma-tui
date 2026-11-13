@@ -518,6 +518,18 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                 }
             }
         }
+        // Only into the pane still open for that item.
+        Update::Details { uri, result } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == uri) {
+                match result {
+                    Ok(item) => details.fill(&item),
+                    Err(error) => {
+                        details.loading = false;
+                        details.error = error;
+                    }
+                }
+            }
+        }
         Update::Notice(text) => app.status = text,
         Update::Playlog => {
             return app.music.progress_changed(std::time::Instant::now());
@@ -525,4 +537,23 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
         _ => {}
     }
     None
+}
+
+/// A request the controller could not take: say so, and settle anything
+/// that was waiting for its answer so it does not wait forever.
+pub fn not_sent(app: &mut App, action: &Action) {
+    app.status = "Busy: command not sent; try again".into();
+    match action {
+        Action::Browse { .. } => app.music.apply(
+            app.music.generation,
+            Err("Busy: press r to retry loading music".into()),
+        ),
+        Action::LoadDetails { uri, .. } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == *uri) {
+                details.loading = false;
+                details.error = "Busy: details not loaded; close and try again".into();
+            }
+        }
+        _ => {}
+    }
 }

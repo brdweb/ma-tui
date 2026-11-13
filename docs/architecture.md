@@ -387,6 +387,30 @@ Sources: `music_assistant_models/media_items/metadata.py` (`MediaItemChapter`),
 `controllers/music/media/audiobooks.py`, the podcast providers and
 `controllers/player_queues/media_resolver.py` at server tags 2.10.5 and 2.10.9.
 
+## Details (2026-11-12)
+
+`i` in Music or Search, or **Details** in the item menu, opens a pane in the
+browser column for a podcast, episode or audiobook. Like the controls menu, it
+takes the keys while open, and Esc closes it. Rows are slim summaries:
+`Media::parse` keeps no description, and library listings omit chapters. So the
+pane opens at once with the row's title and fills in from `music/item_by_uri`,
+read in the picker slot (the newest read cancels the older one). An answer
+fills the pane only if it is still open for that URI.
+
+The facts come from fields that 2.10.x already carries: `podcast.name`,
+`authors`, `narrators`, `metadata.release_date`, `duration`,
+`metadata.performers` (`podcast:person`), `publisher`, the chapter count,
+`metadata.explicit` and `metadata.links`. A fact the server left out is
+omitted rather than shown empty. The description goes through `text::plain`:
+tags are dropped, the common entities decoded, block boundaries turned into
+line breaks, and every control character except the line break removed after
+decoding. It is capped at 20,000 characters, apart from `music::clean`'s
+512-character row limit. Scrolling is clamped to the wrapped height, which is
+computed at word boundaries as the paragraph wraps.
+
+Sources: `MediaItemMetadata` in music-assistant/models 1.1.205 and
+`helpers/podcast_parsers.py` at server tag 2.10.9.
+
 ## Player-first layout (2026-09-16)
 
 The focused pane is marked by filling its heading rather than enlarging it: a

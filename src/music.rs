@@ -1056,6 +1056,17 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
             },
         });
     }
+    // Reading about an item needs no speaker. Last, so it moves no other entry.
+    if crate::details::offered(&media.kind) && !media.uri.is_empty() {
+        entries.push(crate::controls::Entry {
+            section: "About",
+            label: "Details".into(),
+            action: Action::LoadDetails {
+                uri: media.uri.clone(),
+                title: media.title.clone(),
+            },
+        });
+    }
     if entries.is_empty() {
         app.status = if player.is_none() {
             "Select a speaker in Players first, then choose music".into()
@@ -1199,6 +1210,15 @@ pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
             }))
         }
         KeyCode::Char('r') => Some(app.music.reload()),
+        KeyCode::Char('i') if key.modifiers.is_empty() => {
+            let media = app.music.page.items.get(app.music.page.cursor).cloned()?;
+            Some(crate::details::open(
+                app,
+                &media.uri,
+                &media.title,
+                &media.kind,
+            ))
+        }
         KeyCode::Char('[') => {
             if app.music.loading {
                 return Some(Action::None);
