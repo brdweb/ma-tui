@@ -454,9 +454,68 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                         error: String::new(),
                         filter: String::new(),
                         filtering: false,
+                        item: String::new(),
                     });
                 }
                 Err(error) => app.status = format!("Could not load playlists: {error}"),
+            }
+        }
+        Update::ChapterList { uri, result } => {
+            // Only the request still waited for opens a picker.
+            if app.chapter_picker.as_deref() != Some(uri.as_str()) {
+                return None;
+            }
+            app.chapter_picker = None;
+            if app.settings.is_some() {
+                return None;
+            }
+            // Never replace a menu opened while the read was out.
+            if app.menu.is_some() {
+                app.status = "Chapters loaded; close the menu to choose".into();
+                return None;
+            }
+            // Only numbered chapters can be started: the server finds the
+            // chapter by its number.
+            let entries: Vec<Entry> = result
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, chapter)| {
+                    let number = chapter.position?;
+                    let name = if chapter.name.is_empty() {
+                        format!("Chapter {}", index + 1)
+                    } else {
+                        chapter.name.clone()
+                    };
+                    Some(Entry {
+                        section: "Play from chapter",
+                        label: format!("{} · {name}", crate::ui::duration(chapter.start)),
+                        action: Action::PlayChapter {
+                            uri: uri.clone(),
+                            chapter: number,
+                        },
+                    })
+                })
+                .collect();
+            match result {
+                Err(error) => app.status = format!("Could not load chapters: {error}"),
+                Ok(_) if entries.is_empty() => {
+                    app.status = "This audiobook has no chapters to start from".into()
+                }
+                Ok(_) => {
+                    app.menu = Some(Menu {
+                        player: app.selected_id.clone(),
+                        title: "Chapters".into(),
+                        entries,
+                        cursor: 0,
+                        prompt: None,
+                        error: String::new(),
+                        filter: String::new(),
+                        filtering: false,
+                        item: String::new(),
+                    });
+                }
             }
         }
         Update::Notice(text) => app.status = text,

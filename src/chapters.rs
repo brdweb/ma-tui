@@ -113,3 +113,59 @@ pub fn source(queue: &Value) -> (String, Source) {
     }
     (uri, Source::Known(chapters))
 }
+
+/// How far into a chapter "previous" restarts it rather than going back one.
+pub const RESTART_AFTER: f64 = 3.0;
+
+/// The chapter playing at `elapsed`, if any: before the first chapter starts
+/// there is none.
+pub fn index_at(list: &[Chapter], elapsed: f64) -> Option<usize> {
+    if !elapsed.is_finite() {
+        return None;
+    }
+    list.iter().rposition(|chapter| chapter.start <= elapsed)
+}
+
+/// Where a chapter starts, as the whole second `player_queues/seek` takes.
+/// Rounded up, because rounding down can land in the chapter before it.
+pub fn seek_point(chapter: &Chapter) -> f64 {
+    chapter.start.ceil()
+}
+
+/// The position "previous chapter" goes to: the start of this chapter when
+/// more than a few seconds in or already in the first, otherwise the one
+/// before. Before the first chapter, the start of the item.
+pub fn previous(list: &[Chapter], elapsed: f64) -> Option<f64> {
+    if list.is_empty() || !elapsed.is_finite() {
+        return None;
+    }
+    let Some(index) = index_at(list, elapsed) else {
+        return Some(0.0);
+    };
+    let current = seek_point(&list[index]);
+    if index == 0 || elapsed - current > RESTART_AFTER {
+        return Some(current);
+    }
+    Some(seek_point(&list[index - 1]))
+}
+
+/// The position "next chapter" goes to, or none in the last chapter.
+pub fn next(list: &[Chapter], elapsed: f64) -> Option<f64> {
+    if !elapsed.is_finite() {
+        return None;
+    }
+    list.iter()
+        .find(|chapter| chapter.start > elapsed)
+        .map(seek_point)
+}
+
+/// A short label for the chapter at `elapsed`, such as `Ch 3/12 · Name`.
+pub fn label(list: &[Chapter], elapsed: f64) -> Option<String> {
+    let index = index_at(list, elapsed)?;
+    let name = &list[index].name;
+    Some(if name.is_empty() {
+        format!("Ch {}/{}", index + 1, list.len())
+    } else {
+        format!("Ch {}/{} · {name}", index + 1, list.len())
+    })
+}

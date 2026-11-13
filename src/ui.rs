@@ -77,6 +77,16 @@ pub enum Action {
         name: String,
         uri: Option<String>,
     },
+    /// Read an audiobook's chapters, for the chapter picker.
+    LoadChapters {
+        uri: String,
+    },
+    /// Replace the queue with an audiobook, starting at the chapter the
+    /// server numbers `chapter`.
+    PlayChapter {
+        uri: String,
+        chapter: u64,
+    },
 }
 
 impl Action {
@@ -91,6 +101,7 @@ impl Action {
                 | Action::LoadPlaylists { .. }
                 | Action::AddToPlaylist { .. }
                 | Action::CreatePlaylist { .. }
+                | Action::LoadChapters { .. }
         )
     }
 }
@@ -125,6 +136,44 @@ impl App {
         // Keep running from the new position rather than the old snapshot.
         self.elapsed_at = Some(std::time::Instant::now());
         Action::Seek(self.elapsed)
+    }
+
+    /// Move to the previous or next chapter of the playing item, from the
+    /// position on screen, through the same seek as the arrow keys.
+    fn chapter(&mut self, forward: bool) -> Action {
+        let chapters = self.chapters.current(&self.queue_details);
+        if chapters.is_empty() {
+            self.status = "This item has no chapters".into();
+            return Action::None;
+        }
+        let target = if forward {
+            crate::chapters::next(chapters, self.elapsed)
+        } else {
+            crate::chapters::previous(chapters, self.elapsed)
+        };
+        match target {
+            Some(position) => self.seek_to(position),
+            None => {
+                self.status = "Already in the last chapter".into();
+                Action::None
+            }
+        }
+    }
+
+    /// Seek to an absolute position, shown at once and corrected by the next
+    /// snapshot.
+    pub fn seek_to(&mut self, position: f64) -> Action {
+        if !position.is_finite() {
+            return Action::None;
+        }
+        let position = if self.duration.is_finite() && self.duration > 0.0 {
+            position.clamp(0.0, self.duration)
+        } else {
+            position.max(0.0)
+        };
+        self.elapsed = position;
+        self.elapsed_at = Some(std::time::Instant::now());
+        Action::Seek(position)
     }
 
     /// Whether the selected speaker reports that it is playing.
@@ -485,6 +534,8 @@ impl App {
             KeyCode::Char(' ') | KeyCode::Char('p') => Action::Toggle,
             KeyCode::Char('n') | KeyCode::Char('>') | KeyCode::Char('.') => Action::Next,
             KeyCode::Char('<') | KeyCode::Char(',') => Action::Previous,
+            KeyCode::Char('(') => self.chapter(false),
+            KeyCode::Char(')') => self.chapter(true),
             KeyCode::Char('s') => Action::Command(crate::controls::Command::Player {
                 name: "stop",
                 args: serde_json::json!({}),
@@ -688,6 +739,9 @@ pub struct App {
     /// Chapters of the playing item, named by its URI. Read them through
     /// `Chapters::current`, which hides a list loaded for another item.
     pub chapters: crate::chapters::Chapters,
+    /// The audiobook whose chapter picker was asked for and has not arrived,
+    /// so a slow answer opens only for that request.
+    pub chapter_picker: Option<String>,
     /// Draw covers as sixel rather than half blocks.
     pub sixel: bool,
     /// Where the cover was laid out this frame, for a renderer that has to
@@ -740,6 +794,7 @@ impl Default for App {
             artwork: None,
             artwork_generation: 0,
             chapters: crate::chapters::Chapters::default(),
+            chapter_picker: None,
             sixel: false,
             artwork_area: None,
             spectrum_style: crate::config::Spectrum::default(),
@@ -919,13 +974,19 @@ fn hints(app: &App) -> &'static str {
 }
 
 const TRANSPORT_HINTS: &str = "Space/p pause/resume · </> previous/next · s stop · +/- volume · m mute · z shuffle · l repeat · ? controls";
+/// The same keys while the playing item has chapters to move between.
+const CHAPTER_HINTS: &str = "Space/p pause/resume · </> previous/next · (/) chapter · s stop · +/- volume · m mute · z shuffle · l repeat · ? controls";
 
 /// Wrap only between labels: splitting a shortcut from its operation leaves
 /// the exact orphan abbreviations these hints are meant to replace.
 fn hint_rows(app: &App, width: usize, max_rows: usize) -> Vec<String> {
     let mut rows = Vec::new();
     let transport = if app.menu.is_none() && !app.music.filtering && !app.editing {
-        TRANSPORT_HINTS
+        if app.chapters.current(&app.queue_details).is_empty() {
+            TRANSPORT_HINTS
+        } else {
+            CHAPTER_HINTS
+        }
     } else {
         ""
     };
@@ -1086,8 +1147,28 @@ fn draw_now_playing(frame: &mut Frame, app: &mut App, area: Rect, strip: u16) {
         rows[1],
     );
 
-    let second = Layout::horizontal([Constraint::Min(10), Constraint::Length(16)]).split(rows[2]);
+    // The chapter sits beside the byline, taking at most half of its room.
+    let chapter = crate::chapters::label(app.chapters.current(&app.queue_details), app.elapsed)
+        .unwrap_or_default();
+    // Measured in columns, not characters: a wide name would otherwise be
+    // clipped by the layout instead of ending in an ellipsis.
+    let chapter_width = (columns(&chapter) as u16)
+        .saturating_add(2)
+        .min(rows[2].width.saturating_sub(16) / 2);
+    let chapter = fit_columns(&chapter, chapter_width.saturating_sub(2) as usize);
+    let second = Layout::horizontal([
+        Constraint::Min(10),
+        Constraint::Length(if chapter.is_empty() { 0 } else { chapter_width }),
+        Constraint::Length(16),
+    ])
+    .split(rows[2]);
     frame.render_widget(Paragraph::new(app.artist.clone()).style(dim), second[0]);
+    frame.render_widget(
+        Paragraph::new(chapter)
+            .style(Style::default().fg(palette.accent))
+            .alignment(ratatui::layout::Alignment::Right),
+        second[1],
+    );
     frame.render_widget(
         Paragraph::new(format!(
             "{} / {}",
@@ -1096,7 +1177,7 @@ fn draw_now_playing(frame: &mut Frame, app: &mut App, area: Rect, strip: u16) {
         ))
         .style(dim)
         .alignment(ratatui::layout::Alignment::Right),
-        second[1],
+        second[2],
     );
 
     if strip > 0 {
@@ -1290,6 +1371,33 @@ fn track_items<'a>(
             ])
         })
         .collect()
+}
+
+/// How many terminal columns `text` takes.
+fn columns(text: &str) -> usize {
+    ratatui::text::Span::raw(text).width()
+}
+
+/// `text` cut to at most `width` columns, ending in `…` when cut.
+fn fit_columns(text: &str, width: usize) -> String {
+    if columns(text) <= width {
+        return text.to_owned();
+    }
+    let mut cut = String::new();
+    let mut used = 1; // the ellipsis
+    for c in text.chars() {
+        let mut buffer = [0; 4];
+        let wide = columns(c.encode_utf8(&mut buffer));
+        if used + wide > width {
+            break;
+        }
+        used += wide;
+        cut.push(c);
+    }
+    if width > 0 {
+        cut.push('…');
+    }
+    cut
 }
 
 fn truncate(text: &str, width: usize) -> String {
