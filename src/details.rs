@@ -137,6 +137,10 @@ pub fn facts(item: &Value) -> Vec<(&'static str, String)> {
             "Show",
             line(item["podcast"]["name"].as_str().unwrap_or_default()),
         ),
+        (
+            "Episode",
+            crate::music::episode_number(item).unwrap_or_default(),
+        ),
         ("Authors", names(&item["authors"])),
         ("Narrators", names(&item["narrators"])),
         ("Published", published(item).unwrap_or_default()),
