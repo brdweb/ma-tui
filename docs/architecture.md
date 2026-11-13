@@ -121,6 +121,48 @@ and synthetic fixtures do not establish live 2.10.5 compatibility; see the
 candidate publication gates in `docs/releasing.md`. The 2.11 personal
 favourite/event changes and Sendspin 1.0 RC are outside this release.
 
+### API schema version (2026-11-12)
+
+`GET /info` reports `schema_version` beside `server_version`: 65 on 2.10.5 and
+2.10.9, 101 on 2.11.0b8. The client keeps the last value it read, shared by
+every clone of `ApiClient`. It reads it once at startup in the background and
+again whenever the event stream reconnects, because a reconnect can follow a
+server upgrade. `schema_at_least(n)` is false while the schema is unknown,
+missing or malformed (anything but a positive whole number that fits in 32
+bits), so those cases behave like 2.10.x.
+
+Prefer request shapes that both generations accept: command arguments the
+handler does not know are ignored unless the command is registered strict
+(`helpers/api.py`, `parse_arguments`). Branch on the schema only where the
+behaviour really differs. The 2.11.0 stable schema number is not known yet, so
+no name or message here says "2.11" for a schema number.
+
+Sources: `controllers/webserver/controller.py` (`/info`) and
+`helpers/api.py` at server tags 2.10.9 and 2.11.0b8.
+
+### Sorting and per-user favourites (2026-11-12)
+
+From 2.11.0b5 (schema 91), library listings take `sort_field` and
+`sort_direction`, and `order_by` is deprecated: it is honoured only when no
+`sort_field` is sent, through `LEGACY_SORT_KEYS`. `Order::apply` writes
+whichever spelling the server's schema calls for, in one place, for every
+`library_items` call. Year is offered for albums only, because 2.11.0b8 lists
+no year sort for library tracks and rejects one, even through the legacy
+`year_desc`.
+
+From 2.11.0b3, a favourite belongs to one user: `favorite_updated` goes only to
+that user's connections, carrying a `FavoriteUpdate` whose `favorite` is true
+(a like), false (a dislike) or null (cleared). It is applied as a library item
+change that carries only that state, so rows, search results, the now-playing
+item and the favourites listing follow it as they already followed
+`media_item_updated`. Library item events no longer carry favourite state at
+all, so an event changes the heart only when it carries a real true or false.
+
+Sources: `controllers/music/sorting.py`, `controllers/music/constants.py`,
+`controllers/music/media/base.py` and
+`tests/controllers/webserver/test_event_dispatch.py` at server tag 2.11.0b8,
+and `favorite_update.py` in music-assistant/models 1.1.233.
+
 ## Event stream (2026-09-16)
 
 Commands stay on HTTP; state changes arrive on the `/ws` socket instead of being
@@ -216,7 +258,8 @@ search on the right, so adding music never hides the queue. Chrome is eleven
 rows — two header, four now playing, three status, two hints — and the now
 playing block carries transport state, volume, mute and the queue's
 shuffle/repeat rather than leaving them to other panes. The hint lines are the
-focused pane's keys plus a fixed transport line kept under 102 columns.
+focused pane's keys plus a transport line, which wraps between labels and
+names `(`/`)` only while the playing item has chapters.
 
 `p` is play/pause, matching other players, with previous/next on `<`/`>` (`,`
 and `.` as unshifted aliases) and `n` retained for next. Following the
@@ -282,15 +325,30 @@ hydrated per user from the playlog table and falling back to the provider's own
 state. Both are null when the provider does not report progress, which is not
 the same as "not played": nothing is shown then rather than claiming unplayed.
 
-A podcast opens into `music/podcasts/podcast_episodes`. An audiobook does not
-open into a chapter listing: 2.10.2 exposes only `audiobook_versions` beyond
-the base media APIs. Chapter bookmarks can exist in metadata, but this browser
-treats an audiobook as one playable item with a resume point.
+A podcast opens into `music/podcasts/podcast_episodes`, newest first, a page
+at a time (`[`/`]`). From 2.11.0b6 (schema 99) that command returns one sorted
+page, with `limit` defaulting to 500. Earlier servers ignore the paging
+arguments and return every episode in the provider's order. So a server at
+schema 99 or later is asked for `sort_field: "position"`, `sort_direction:
+"desc"`, `limit` and `offset`. Anything older, or a server whose schema is not
+known yet, is asked for everything (`limit: 0`, which a paging server also
+honours) and paged here. Either way the order comes from each episode's
+`position`, which counts from the oldest (`get_episode_positions`), then from
+its release date, never from arrival order: the 2.10.9 feed provider already
+sends episodes newest first, so reversing them was wrong there too. An
+audiobook does not open into a listing: it is one playable item with a resume
+point, and its chapters come from the full item (see Chapters below). Its item
+menu offers **Chapters…** to start at one.
 
-There is no server-side filter for unplayed episodes: `library_items` takes
-`played_only`, which selects the opposite, and has no unplayed equivalent. The
-unplayed list is therefore assembled here — the shows are listed, then each is
-asked for its episodes and filtered — which is one request per subscription.
+There is no server request for unplayed episodes across shows: `library_items`
+takes `played_only`, which selects the opposite, and has no unplayed
+equivalent. The unplayed list is therefore assembled here: the shows are
+listed, then each is asked for its episodes, which is one request per
+subscription. From 2.11.0b6 (schema 99), `podcast_episodes` takes
+`fully_played: false`, so each show filters itself and returns its newest
+unplayed page (`None` progress counts as unplayed, as it does here). On 2.10.x
+each show's whole list is filtered here before its first page is cut, so older
+unplayed episodes behind a hundred played ones are still found.
 They overlap a few at a time rather than running in a loop, because the server
 answering them is the one also serving the audio, and the result is capped so a
 large subscription list cannot become an unbounded read.
@@ -303,9 +361,110 @@ item menu opens without a selection. `playlog_updated` re-reads a listing that
 would show progress, throttled, because a playing audiobook produces those
 events continuously.
 
+An episode row reads `Show · S2 E14 · 2026-10-30 · resume 12:04`. The
+numbers are the publisher's `season` and `episode_number` (2.11.0b4 and later,
+`helpers/podcast_parsers.py`, `get_publisher_number`). Both are null for many
+feeds and absent on 2.10.x, and either one is shown alone when the other is
+missing. The date is the calendar date of `metadata.release_date` as sent.
+
 Sources: `controllers/music/controller.py`, `controllers/music/media/base.py`,
 `media/podcasts.py` and `media/audiobooks.py` at server tag 2.10.2, and
 `media_items/media_item.py` in music-assistant/models.
+
+## Chapters (2026-11-12)
+
+A chapter is `{position, name, start, end}` on the media item's
+`metadata.chapters`, with times in seconds and `end` nullable. Audiobookshelf
+fills it for books and episodes, Spotify for books, and the Podcast Feed,
+gPodder and Podcast Index providers fetch Podcasting 2.0 `podcast:chapters` —
+but only on the single-episode path, never while listing a show. Library
+listings are slim summaries without chapters, and a queue item started from a
+listing may lack them too.
+
+So `chapters::source` reads the queue's playing item first, and only when an
+audiobook or episode arrives without chapters does the controller fetch the
+full item once with `music/item_by_uri`, which reaches that single-episode
+path. Like the cover, the fetch happens when the playing item changes and a
+superseded one is cancelled. Other media types never cost a request.
+
+The result is sent after the queue snapshot naming the item and is kept in
+`App` with the item's URI. `Chapters::current` hands it out only while that
+URI is still the one playing, so a slow fetch for the previous item can never
+label the next. Names are untrusted: control characters are stripped and the
+length capped. A chapter without a finite, non-negative start is dropped, the
+rest sorted by start, and no usable chapters simply means none.
+
+The current chapter is derived from the displayed elapsed time, so it follows
+the same carried-forward position as the progress bar, and is shown beside the
+byline as `Ch 3/12 · Name`. `(` and `)` resolve to the existing absolute
+`Action::Seek`, so MPRIS, the optimistic position update and the queue-ownership
+checks are unchanged. A chapter is sought at its start rounded up to the next
+whole second, because `player_queues/seek` takes an integer and rounding down
+can land in the chapter before. `(` restarts the current chapter after its
+first three seconds and otherwise goes to the one before. The controls menu
+lists every chapter as a seek under its own heading after Playback.
+
+**Chapters…** in an audiobook's item menu reads the full item through the
+playlist picker's slot (one picker read at a time, the newer cancelling the
+older) and lists the numbered chapters. Choosing one sends
+`player_queues/play_media` with `option: "replace"` and `start_item` set to the
+chapter's `position` as a string: `get_audiobook_resume_point` matches
+`int(start_item)` against `chapter.position` and starts at its `start`. The
+`start_item` docstring also mentions episodes, but in 2.10.9 the
+`PODCAST_EPISODE` branch of `_resolve_media_items` never passes `start_item`
+on, so episodes get no picker. Play-then-seek was not used, because it races
+the stream start.
+
+Sources: `music_assistant_models/media_items/metadata.py` (`MediaItemChapter`),
+`controllers/music/media/audiobooks.py`, the podcast providers and
+`controllers/player_queues/media_resolver.py` at server tags 2.10.5 and 2.10.9.
+
+## Details (2026-11-12)
+
+`i` in Music or Search, or **Details** in the item menu, opens a pane in the
+browser column for a podcast, episode or audiobook. Like the controls menu, it
+takes the keys while open, and Esc closes it. Rows are slim summaries:
+`Media::parse` keeps no description, and library listings omit chapters. So the
+pane opens at once with the row's title and fills in from `music/item_by_uri`,
+read in the picker slot (the newest read cancels the older one). An answer
+fills the pane only if it is still open for that URI.
+
+The facts come from fields that 2.10.x already carries: `podcast.name`,
+`authors`, `narrators`, `metadata.release_date`, `duration`,
+`metadata.performers` (`podcast:person`), `publisher`, the chapter count,
+`metadata.explicit` and `metadata.links`. A fact the server left out is
+omitted rather than shown empty. The description goes through `text::plain`:
+tags are dropped, the common entities decoded, block boundaries turned into
+line breaks, and every control character except the line break removed after
+decoding. It is capped at 20,000 characters, apart from `music::clean`'s
+512-character row limit. Scrolling is clamped to the wrapped height, which is
+computed at word boundaries as the paragraph wraps.
+
+Sources: `MediaItemMetadata` in music-assistant/models 1.1.205 and
+`helpers/podcast_parsers.py` at server tag 2.10.9.
+
+## Transcripts (2026-11-12, against 2.11.0b8)
+
+From 2.11.0b3, an episode's `metadata.has_transcript` says whether
+`music/podcasts/podcast_episode_transcript(item_id,
+provider_instance_id_or_domain)` has anything. That command takes the
+provider's episode id and answers `[text, cues]`, where a cue is `{start, end,
+text, speaker}` and `[null, null]` means none. Providers: Podcast Feed,
+gPodder, iTunes, Overcast, Podcast Index and Pocket Casts, but not
+Audiobookshelf. On 2.10.x the flag is absent, so nothing is offered.
+
+In the details pane, `t` reads the transcript once and shows it in place of
+the details; `t` again switches back without a new read, and after a failure a
+second `t` retries. The text is preferred and goes through `text::plain`.
+Without it, each cue is cleaned on its own and becomes a line, prefixed with
+the speaker when the source names one, so markup in one cue cannot flatten the
+line breaks. The result is capped at 120,000 characters (an hour of speech is
+about 50,000), and the pane says when it was cut. Following the playback
+position through the cues is a separate step.
+
+Sources: `controllers/music/media/podcasts.py` at server tag 2.11.0b8, and
+`media_items/metadata.py` (`MediaItemTranscriptCue`, `has_transcript`) in
+music-assistant/models 1.1.233.
 
 ## Player-first layout (2026-09-16)
 

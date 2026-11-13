@@ -23,6 +23,12 @@ pub enum Update {
     },
     /// The cover for what is playing, or none when there is not one.
     Artwork(Option<crate::artwork::Art>),
+    /// The chapters of the item at `uri`, which may have stopped playing by
+    /// the time this arrives.
+    Chapters {
+        uri: String,
+        chapters: Vec<crate::chapters::Chapter>,
+    },
     Offline(String),
     Search(String, Result<Vec<Track>, String>),
     Browse(
@@ -33,6 +39,21 @@ pub enum Update {
     Playlists {
         uri: String,
         result: Result<Vec<crate::music::Media>, String>,
+    },
+    /// An audiobook's chapters for the picker, answering LoadChapters for `uri`.
+    ChapterList {
+        uri: String,
+        result: Result<Vec<crate::chapters::Chapter>, String>,
+    },
+    /// The full item for the details pane, answering LoadDetails for `uri`.
+    Details {
+        uri: String,
+        result: Result<serde_json::Value, String>,
+    },
+    /// An episode's transcript, answering LoadTranscript for `uri`.
+    Transcript {
+        uri: String,
+        result: Result<serde_json::Value, String>,
     },
     Notice(String),
 }
@@ -70,6 +91,29 @@ impl Pending {
             previous.abort();
         }
     }
+    fn cancel(&mut self) {
+        if let Some(previous) = self.0.take() {
+            previous.abort();
+        }
+    }
+    fn finished(&self) -> bool {
+        self.0.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+}
+
+/// A favourite change applied to the rows showing the item under any of its
+/// provider URIs. The 2.11 event names only the library item, so its mappings
+/// are read; `None` when that read fails or the item has none.
+pub async fn favorite_with_mappings(api: &ApiClient, uri: &str, favorite: bool) -> Option<Update> {
+    let item = api.item(uri).await.ok()?;
+    let mappings = item["provider_mappings"]
+        .as_array()
+        .filter(|mappings| !mappings.is_empty())?
+        .clone();
+    Some(Update::MediaItem {
+        uri: uri.to_owned(),
+        item: Some(serde_json::json!({ "favorite": favorite, "provider_mappings": mappings })),
+    })
 }
 
 impl Drop for Pending {
@@ -124,6 +168,8 @@ impl Controller {
         let (requests, mut commands) = mpsc::channel::<Request>(32);
         let (tx, updates) = mpsc::channel(16);
         let task = tokio::spawn(async move {
+            // Re-read on reconnect: the server may have been upgraded.
+            let mut learning = Pending::default();
             let mut events = events;
             // Having a receiver does not mean the socket connected or
             // authenticated. Poll until the stream explicitly reports Online.
@@ -141,6 +187,10 @@ impl Controller {
             // The cover only changes when the item does, so it is fetched then
             // rather than on every queue read.
             let (mut covering, mut cover) = (Pending::default(), String::new());
+            // Chapters likewise belong to the item, not to the snapshot.
+            let (mut chaptering, mut chaptered) = (Pending::default(), String::new());
+            // One mapping lookup per item; a newer change for it replaces the older.
+            let mut favoriting: std::collections::HashMap<String, Pending> = Default::default();
             loop {
                 let mut stale = Stale::all();
                 tokio::select! {
@@ -173,6 +223,11 @@ impl Controller {
                                 // Anything shown may have changed while it was down.
                                 Event::Online => {
                                     stale = Stale::all();
+                                    // A reconnect can follow a server upgrade.
+                                    let schema = api.clone();
+                                    learning.replace(tokio::spawn(async move {
+                                        let _ = schema.refresh_schema().await;
+                                    }));
                                     interval = tokio::time::interval(POLL_LIVE);
                                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                                     if tx.send(Update::Stream(true)).await.is_err() { return; }
@@ -195,6 +250,21 @@ impl Controller {
                                         return;
                                     }
                                 }
+                                // Rows under the library URI change at once;
+                                // provider rows once the mappings are read.
+                                Event::Favorite { uri, favorite } => {
+                                    let item = Some(serde_json::json!({ "favorite": favorite }));
+                                    if tx.send(Update::MediaItem { uri: uri.clone(), item }).await.is_err() {
+                                        return;
+                                    }
+                                    favoriting.retain(|_, task| !task.finished());
+                                    let (api, tx) = (api.clone(), tx.clone());
+                                    favoriting.entry(uri.clone()).or_default().replace(tokio::spawn(async move {
+                                        if let Some(update) = favorite_with_mappings(&api, &uri, favorite).await {
+                                            let _ = tx.send(update).await;
+                                        }
+                                    }));
+                                }
                             }
                             next = events.as_mut().and_then(|rx| rx.try_recv().ok());
                         }
@@ -208,6 +278,9 @@ impl Controller {
                                 Action::Browse { .. }
                                     | Action::Search(_)
                                     | Action::LoadPlaylists { .. }
+                                    | Action::LoadChapters { .. }
+                                    | Action::LoadDetails { .. }
+                                    | Action::LoadTranscript { .. }
                             )
                         {
                             let _ = tx.send(Update::Notice("Command expired; press the key again".into())).await;
@@ -234,6 +307,43 @@ impl Controller {
                             playlists.replace(tokio::spawn(async move {
                                 let result = api.editable_playlists().await.map_err(|e| e.to_string());
                                 let _ = tx.send(Update::Playlists { uri, result }).await;
+                            }));
+                            continue;
+                        }
+                        if let Action::LoadTranscript { uri, item_id, provider } = command.action {
+                            let (api, tx) = (api.clone(), tx.clone());
+                            playlists.replace(tokio::spawn(async move {
+                                let result = api
+                                    .command(
+                                        "music/podcasts/podcast_episode_transcript",
+                                        serde_json::json!({
+                                            "item_id": item_id,
+                                            "provider_instance_id_or_domain": provider,
+                                        }),
+                                    )
+                                    .await
+                                    .map_err(|e| e.to_string());
+                                let _ = tx.send(Update::Transcript { uri, result }).await;
+                            }));
+                            continue;
+                        }
+                        if let Action::LoadDetails { uri, .. } = command.action {
+                            let (api, tx) = (api.clone(), tx.clone());
+                            playlists.replace(tokio::spawn(async move {
+                                let result = api.item(&uri).await.map_err(|e| e.to_string());
+                                let _ = tx.send(Update::Details { uri, result }).await;
+                            }));
+                            continue;
+                        }
+                        if let Action::LoadChapters { uri } = command.action {
+                            let (api, tx) = (api.clone(), tx.clone());
+                            playlists.replace(tokio::spawn(async move {
+                                let result = api
+                                    .item(&uri)
+                                    .await
+                                    .map(|item| crate::chapters::parse(&item))
+                                    .map_err(|e| e.to_string());
+                                let _ = tx.send(Update::ChapterList { uri, result }).await;
                             }));
                             continue;
                         }
@@ -299,8 +409,37 @@ impl Controller {
                             }));
                         }
                     }
+                    let chapters = queue
+                        .as_ref()
+                        .ok()
+                        .map(|q| crate::chapters::source(&q.details))
+                        .filter(|(uri, _)| *uri != chaptered);
                     if tx.send(Update::Queue(id, queue)).await.is_err() {
                         break;
+                    }
+                    // Sent after the snapshot naming the item, so the interface
+                    // knows which item these belong to when they arrive.
+                    if let Some((uri, source)) = chapters {
+                        chaptered = uri.clone();
+                        match source {
+                            crate::chapters::Source::Known(chapters) => {
+                                chaptering.cancel();
+                                if tx.send(Update::Chapters { uri, chapters }).await.is_err() {
+                                    break;
+                                }
+                            }
+                            crate::chapters::Source::Fetch => {
+                                let (api, tx) = (api.clone(), tx.clone());
+                                chaptering.replace(tokio::spawn(async move {
+                                    let chapters = api
+                                        .item(&uri)
+                                        .await
+                                        .map(|item| crate::chapters::parse(&item))
+                                        .unwrap_or_default();
+                                    let _ = tx.send(Update::Chapters { uri, chapters }).await;
+                                }));
+                            }
+                        }
                     }
                 }
             }
@@ -375,6 +514,9 @@ async fn execute(api: &ApiClient, request: Request) -> anyhow::Result<Option<&'s
                     api.enqueue_uris(&player, &uris).await?;
                 }
                 Action::PlayNext(uri) => api.play_next_uri(&player, &uri).await?,
+                Action::PlayChapter { uri, chapter } => {
+                    api.play_chapter(&player, &uri, chapter).await?
+                }
                 Action::StartRadio(uri) => {
                     api.start_radio(&player, &uri).await?;
                     return Ok(Some("Radio started"));

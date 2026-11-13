@@ -333,6 +333,9 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
         },
         Update::MediaItem { uri, item } => {
             let item = item.as_ref();
+            // From 2.11 a library item event carries no favourite state (it is
+            // per user now); only a real true or false changes what is shown.
+            let favorite = item.and_then(|item| item["favorite"].as_bool());
             let showing_favorites = matches!(
                 &app.music.page.target,
                 Target::Library { favorite: true, .. }
@@ -344,10 +347,11 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                     continue;
                 }
                 page_matched = true;
-                if let Some(item) = item {
-                    let favorite = item["favorite"] == true;
-                    page_favorite_changed |= media.favorite != favorite;
-                    media.favorite = favorite;
+                if item.is_some() {
+                    if let Some(favorite) = favorite {
+                        page_favorite_changed |= media.favorite != favorite;
+                        media.favorite = favorite;
+                    }
                     media.in_library = true;
                 } else {
                     media.in_library = false;
@@ -360,8 +364,10 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                 if !matches_media(media, &uri, item) {
                     continue;
                 }
-                if let Some(item) = item {
-                    media.favorite = item["favorite"] == true;
+                if item.is_some() {
+                    if let Some(favorite) = favorite {
+                        media.favorite = favorite;
+                    }
                     media.in_library = true;
                 } else {
                     media.in_library = false;
@@ -370,14 +376,13 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
             if let Some(current) = app.queue_details.pointer_mut("/current_item/media_item") {
                 let media = Media::parse(current, "track");
                 if matches_media(&media, &uri, item) {
-                    if let Some(item) = item {
-                        current["favorite"] = serde_json::Value::Bool(item["favorite"] == true);
+                    if let Some(favorite) = favorite {
+                        current["favorite"] = serde_json::Value::Bool(favorite);
                     }
                 }
             }
             if showing_favorites
-                && (page_favorite_changed
-                    || (!page_matched && item.is_some_and(|item| item["favorite"] == true)))
+                && (page_favorite_changed || (!page_matched && favorite == Some(true)))
             {
                 return Some(app.music.reload());
             }
@@ -386,6 +391,19 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
         Update::Artwork(art) => {
             app.artwork = art;
             app.artwork_generation = app.artwork_generation.wrapping_add(1);
+        }
+        // Only for what is playing now: a fetch for an item that has since
+        // been replaced must not label the new one.
+        // Kept while no item is known either (a failed or cleared queue
+        // read): the controller does not fetch the same item again, and the
+        // list is only read once the queue names that item.
+        Update::Chapters { uri, chapters }
+            if [uri.as_str(), ""].contains(&crate::chapters::playing_uri(&app.queue_details)) =>
+        {
+            app.chapters = crate::chapters::Chapters {
+                uri,
+                list: chapters,
+            };
         }
         // The server's own clock, for the queue currently on screen.
         Update::Elapsed(queue_id, seconds) if app.queue_id == queue_id => {
@@ -436,9 +454,88 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                         error: String::new(),
                         filter: String::new(),
                         filtering: false,
+                        item: String::new(),
                     });
                 }
                 Err(error) => app.status = format!("Could not load playlists: {error}"),
+            }
+        }
+        Update::ChapterList { uri, result } => {
+            // Only the request still waited for opens a picker.
+            if app.chapter_picker.as_deref() != Some(uri.as_str()) {
+                return None;
+            }
+            app.chapter_picker = None;
+            if app.settings.is_some() {
+                return None;
+            }
+            // Never replace a menu opened while the read was out.
+            if app.menu.is_some() {
+                app.status = "Chapters loaded; close the menu to choose".into();
+                return None;
+            }
+            // Only numbered chapters can be started: the server finds the
+            // chapter by its number.
+            let entries: Vec<Entry> = result
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, chapter)| {
+                    let number = chapter.position?;
+                    let name = if chapter.name.is_empty() {
+                        format!("Chapter {}", index + 1)
+                    } else {
+                        chapter.name.clone()
+                    };
+                    Some(Entry {
+                        section: "Play from chapter",
+                        label: format!("{} · {name}", crate::ui::duration(chapter.start)),
+                        action: Action::PlayChapter {
+                            uri: uri.clone(),
+                            chapter: number,
+                        },
+                    })
+                })
+                .collect();
+            match result {
+                Err(error) => app.status = format!("Could not load chapters: {error}"),
+                Ok(_) if entries.is_empty() => {
+                    app.status = "This audiobook has no chapters to start from".into()
+                }
+                Ok(_) => {
+                    app.menu = Some(Menu {
+                        player: app.selected_id.clone(),
+                        title: "Chapters".into(),
+                        entries,
+                        cursor: 0,
+                        prompt: None,
+                        error: String::new(),
+                        filter: String::new(),
+                        filtering: false,
+                        item: String::new(),
+                    });
+                }
+            }
+        }
+        // Only into the pane still open for that item.
+        Update::Details { uri, result } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == uri) {
+                match result {
+                    Ok(item) => details.fill(&item),
+                    Err(error) => {
+                        details.loading = false;
+                        details.error = error;
+                    }
+                }
+            }
+        }
+        Update::Transcript { uri, result } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == uri) {
+                details.transcript = Some(match result {
+                    Ok(value) => crate::transcript::Transcript::parse(&value),
+                    Err(error) => crate::transcript::Transcript::Failed(error),
+                });
             }
         }
         Update::Notice(text) => app.status = text,
@@ -448,4 +545,30 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
         _ => {}
     }
     None
+}
+
+/// A request the controller could not take: say so, and settle anything
+/// that was waiting for its answer so it does not wait forever.
+pub fn not_sent(app: &mut App, action: &Action) {
+    app.status = "Busy: command not sent; try again".into();
+    match action {
+        Action::Browse { .. } => app.music.apply(
+            app.music.generation,
+            Err("Busy: press r to retry loading music".into()),
+        ),
+        Action::LoadDetails { uri, .. } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == *uri) {
+                details.loading = false;
+                details.error = "Busy: details not loaded; close and try again".into();
+            }
+        }
+        Action::LoadTranscript { uri, .. } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == *uri) {
+                details.transcript = Some(crate::transcript::Transcript::Failed(
+                    "Busy: press t twice to try again".into(),
+                ));
+            }
+        }
+        _ => {}
+    }
 }

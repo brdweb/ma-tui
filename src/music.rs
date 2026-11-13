@@ -16,6 +16,9 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 
 pub const PAGE_SIZE: usize = 100;
+/// The first API schema whose library listings take `sort_field` and
+/// `sort_direction` (2.11.0b5); `order_by` is deprecated from then on.
+pub const SORT_FIELDS_SCHEMA: u32 = 91;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -43,11 +46,13 @@ pub enum Target {
         id: String,
         provider: String,
     },
-    /// A podcast's episodes. MA 2.10.5 has no separate audiobook chapter-list
-    /// API, so this browser treats a book as one playable item with a resume point.
+    /// A podcast's episodes, newest first, a page at a time. An audiobook is
+    /// not a folder: it is one playable item, and its chapters come from the
+    /// full item (`crate::chapters`).
     Podcast {
         id: String,
         provider: String,
+        offset: usize,
     },
     /// Server-maintained shelves keep listening activity current without UI state.
     InProgress,
@@ -136,6 +141,34 @@ impl Order {
         Self::Random,
     ];
 
+    /// The field and direction a server from schema `SORT_FIELDS_SCHEMA`
+    /// takes instead of `order_by`. Random has no direction.
+    pub fn sort(self) -> (&'static str, Option<&'static str>) {
+        match self {
+            Self::Name => ("sort_name", Some("asc")),
+            Self::RecentlyAdded => ("timestamp_added", Some("desc")),
+            Self::LastPlayed => ("last_played", Some("desc")),
+            Self::MostPlayed => ("play_count", Some("desc")),
+            Self::Year => ("year", Some("desc")),
+            Self::Random => ("random", None),
+        }
+    }
+
+    /// Put this order into a library listing's arguments, in the spelling the
+    /// server understands: `sort_field` and `sort_direction` from schema
+    /// `SORT_FIELDS_SCHEMA` (where `order_by` is deprecated), `order_by` before.
+    pub fn apply(self, args: &mut Value, sort_fields: bool) {
+        if sort_fields {
+            let (field, direction) = self.sort();
+            args["sort_field"] = json!(field);
+            if let Some(direction) = direction {
+                args["sort_direction"] = json!(direction);
+            }
+        } else {
+            args["order_by"] = json!(self.order_by());
+        }
+    }
+
     /// The server's spelling stays beside the UI choices that select it.
     pub fn order_by(self) -> &'static str {
         match self {
@@ -160,8 +193,10 @@ impl Order {
         }
     }
 
+    /// Year is offered for albums only: 2.11 lists no year sort for library
+    /// tracks and rejects one (`controllers/music/sorting.py`, 2.11.0b8).
     fn next(self, kind: Kind) -> Self {
-        let orders: &[Self] = if matches!(kind, Kind::Albums | Kind::Tracks) {
+        let orders: &[Self] = if kind == Kind::Albums {
             &Self::WITH_YEAR
         } else {
             &Self::WITHOUT_YEAR
@@ -228,7 +263,11 @@ impl Media {
                 "album" => Some(Target::Album { id, provider }),
                 "playlist" => Some(Target::Playlist { id, provider }),
                 "artist" => Some(Target::Artist { id, provider }),
-                "podcast" => Some(Target::Podcast { id, provider }),
+                "podcast" => Some(Target::Podcast {
+                    id,
+                    provider,
+                    offset: 0,
+                }),
                 _ => None,
             }
         } else {
@@ -248,11 +287,21 @@ impl Media {
         // type reads better than a provider instance id, which means nothing to
         // anyone reading it.
         let belongs = crate::api::byline(v);
-        let detail = if belongs.is_empty() {
-            clean(&format!("{}{progress}", readable(&kind)))
+        let belongs = if belongs.is_empty() {
+            readable(&kind)
         } else {
-            clean(&format!("{belongs}{progress}"))
+            belongs
         };
+        // Which episode, and when it came out, matter as much as the show.
+        let published = match (episode_number(v), release_date(v)) {
+            _ if kind != "podcast_episode" => String::new(),
+            (number, date) => [number, date]
+                .into_iter()
+                .flatten()
+                .map(|part| format!(" · {part}"))
+                .collect(),
+        };
+        let detail = clean(&format!("{belongs}{published}{progress}"));
         Self {
             title: clean(&value("name")),
             detail,
@@ -353,6 +402,32 @@ fn position(ms: u64) -> String {
         (hours, minutes, seconds) => format!("{hours}:{minutes:02}:{seconds:02}"),
     }
 }
+/// The publisher's numbering of an episode, `S2 E14`, `E14` or `S2`, from
+/// `season` and `episode_number` (2.11.0b4 and later). Both are null for many
+/// feeds and absent before 2.11; anything but a positive whole number is
+/// ignored.
+pub fn episode_number(v: &Value) -> Option<String> {
+    let number = |key: &str| v[key].as_u64().filter(|n| *n > 0);
+    match (number("season"), number("episode_number")) {
+        (Some(season), Some(episode)) => Some(format!("S{season} E{episode}")),
+        (None, Some(episode)) => Some(format!("E{episode}")),
+        (Some(season), None) => Some(format!("S{season}")),
+        (None, None) => None,
+    }
+}
+
+/// The calendar date an item was released, from `metadata.release_date`.
+/// The server sends an ISO 8601 timestamp (the podcast providers set it in
+/// UTC); its date is shown as sent, without converting time zones.
+pub fn release_date(v: &Value) -> Option<String> {
+    let date = v["metadata"]["release_date"].as_str()?.get(..10)?;
+    let shaped = date.bytes().enumerate().all(|(index, byte)| match index {
+        4 | 7 => byte == b'-',
+        _ => byte.is_ascii_digit(),
+    });
+    shaped.then(|| date.to_owned())
+}
+
 fn clean(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).take(512).collect()
 }
@@ -364,17 +439,17 @@ pub fn demo_listing(target: &Target) -> Vec<Media> {
         Target::Library { kind, .. } => kind.media_type(),
         Target::Artist { .. } => "album",
         Target::Providers { .. } => "playlist",
+        Target::Podcast { .. } | Target::UnplayedEpisodes => "podcast_episode",
         Target::Album { .. }
         | Target::Playlist { .. }
         | Target::ArtistTracks { .. }
-        | Target::Podcast { .. }
         | Target::InProgress
         | Target::RecentlyAdded
-        | Target::RecentlyPlayed
-        | Target::UnplayedEpisodes => "track",
+        | Target::RecentlyPlayed => "track",
     };
     vec![Media::parse(
-        &json!({"name":format!("Sample {kind} — offline preview"),"item_id":"sample","provider":"demo","uri":format!("demo://{kind}/sample"),"media_type":kind,"artists":[{"name":"Fictional artist"}]}),
+        &json!({"name":format!("Sample {kind} — offline preview"),"item_id":"sample","provider":"demo","uri":format!("demo://{kind}/sample"),"media_type":kind,"artists":[{"name":"Fictional artist"}],
+                "podcast":{"name":"Fictional show"},"season":2,"episode_number":14,"metadata":{"release_date":"2026-11-01T06:00:00+00:00"}}),
         kind,
     )]
 }
@@ -614,22 +689,103 @@ const CONCURRENT_SHOWS: usize = 6;
 /// Most episodes the unplayed list will gather, so a large subscription list
 /// cannot turn into an unbounded read.
 const MAX_UNPLAYED: usize = 300;
+/// Most pages read from one show for the unplayed shelf, so a long back
+/// catalogue of finished episodes costs a bounded number of reads.
+const MAX_SHOW_PAGES: usize = 10;
+
+/// The first API schema whose `podcast_episodes` returns one sorted page
+/// (2.11.0b6). Older servers ignore `limit` and `offset` and return every
+/// episode in the provider's order.
+pub const PAGED_EPISODES_SCHEMA: u32 = 99;
+
+/// Episodes newest first by the server's `position`, which counts from the
+/// oldest, then by release date. Episodes with neither keep the order they
+/// arrived in, which is the server's own.
+fn newest_first(episodes: &mut [Value]) {
+    episodes.sort_by(|a, b| {
+        let key = |v: &Value| {
+            (
+                v["position"].as_u64(),
+                v["metadata"]["release_date"].as_str().map(str::to_owned),
+            )
+        };
+        key(b).cmp(&key(a))
+    });
+}
+
+impl ApiClient {
+    /// One page of a show's episodes, newest first, and the page after it.
+    ///
+    /// A server that pages is asked for the page. Anything older, or a server
+    /// whose schema is not known yet, is asked for everything (`limit: 0`,
+    /// which a paging server also honours) and paged here, so a long show is
+    /// never cut short at the server's default page size.
+    ///
+    /// `unplayed` leaves out finished episodes before the page is cut: a paging
+    /// server does it itself (`fully_played: false`, which also keeps those
+    /// with unknown progress), and an older server's full list is filtered
+    /// here, so a show whose newest hundred are all played still has its
+    /// older unplayed episodes found.
+    async fn podcast_episodes(
+        &self,
+        id: &str,
+        provider: &str,
+        offset: usize,
+        unplayed: bool,
+        // How many to return from a server that sends the whole show; one
+        // that pages always returns its own page of `PAGE_SIZE`.
+        size: usize,
+    ) -> Result<(Vec<Value>, Option<usize>)> {
+        let paged = self.schema_at_least(PAGED_EPISODES_SCHEMA);
+        let (limit, from) = if paged { (PAGE_SIZE, offset) } else { (0, 0) };
+        let mut args = json!({
+            "item_id":id,"provider_instance_id_or_domain":provider,
+            "sort_field":"position","sort_direction":"desc",
+            "limit":limit,"offset":from,
+        });
+        if paged && unplayed {
+            args["fully_played"] = json!(false);
+        }
+        let listing = self
+            .command("music/podcasts/podcast_episodes", args)
+            .await?;
+        let mut episodes = listing
+            .as_array()
+            .ok_or_else(|| anyhow!("Invalid podcast episode listing"))?
+            .clone();
+        newest_first(&mut episodes);
+        if paged {
+            let next = (episodes.len() == PAGE_SIZE).then_some(offset + PAGE_SIZE);
+            return Ok((episodes, next));
+        }
+        if unplayed {
+            episodes.retain(|episode| episode["fully_played"] != true);
+        }
+        let total = episodes.len();
+        let page: Vec<Value> = episodes.into_iter().skip(offset).take(size).collect();
+        let next = (offset + size < total).then_some(offset + size);
+        Ok((page, next))
+    }
+}
 
 impl ApiClient {
     /// Every unfinished episode across every show, newest first within each.
     ///
-    /// MA 2.10.5 has no server-side filter for this: `library_items` takes
-    /// `played_only`, which selects the opposite, and there is no unplayed
-    /// equivalent. So the shows are listed and then each is asked for its
-    /// episodes and filtered here. That is one request per subscription, which
-    /// is why it is bounded and overlapped rather than issued in a loop.
+    /// There is no request for this across shows, so the shows are listed and
+    /// then each is asked for its episodes: one request per subscription,
+    /// which is why it is bounded and overlapped rather than issued in a loop.
+    /// From 2.11.0b6 each show filters its own finished episodes
+    /// (`fully_played: false`), so its newest unplayed page arrives even when
+    /// the newest hundred are all played. On 2.10.x each show's episodes are
+    /// filtered here.
     async fn unplayed_episodes(&self) -> Result<(Vec<Media>, Option<Target>)> {
         use futures_util::StreamExt;
         let shows = self
-            .command(
-                "music/podcasts/library_items",
-                json!({"limit":PAGE_SIZE,"offset":0,"order_by":"sort_name"}),
-            )
+            .command("music/podcasts/library_items", {
+                let mut args = json!({"limit":PAGE_SIZE,"offset":0});
+                Order::Name.apply(&mut args, self.schema_at_least(SORT_FIELDS_SCHEMA));
+                args
+            })
             .await?;
         let shows: Vec<(String, String)> = shows
             .as_array()
@@ -644,23 +800,28 @@ impl ApiClient {
 
         let listings = futures_util::stream::iter(shows)
             .map(|(id, provider)| async move {
-                let listing = self
-                    .command(
-                        "music/podcasts/podcast_episodes",
-                        json!({"item_id":id,"provider_instance_id_or_domain":provider}),
-                    )
-                    .await?;
-                let mut episodes: Vec<Media> = listing
-                    .as_array()
-                    .ok_or_else(|| anyhow!("Invalid podcast episode listing"))?
-                    .iter()
-                    .map(|episode| Media::parse(episode, "podcast_episode"))
-                    .filter(|episode| !episode.fully_played)
-                    .collect();
-                // Within a show the newest episode is the one to reach for,
-                // and position supplies the server's episode order.
-                episodes.reverse();
-                Ok::<_, anyhow::Error>(episodes)
+                // Within a show the newest episode is the one to reach for.
+                // Pages are followed until the shelf could be filled, so a
+                // run of finished episodes does not hide older unplayed ones.
+                let mut unplayed = Vec::new();
+                let mut offset = Some(0);
+                for _ in 0..MAX_SHOW_PAGES {
+                    let Some(from) = offset.filter(|_| unplayed.len() < MAX_UNPLAYED) else {
+                        break;
+                    };
+                    // A server sending the whole show is read once.
+                    let (episodes, next) = self
+                        .podcast_episodes(&id, &provider, from, true, MAX_UNPLAYED)
+                        .await?;
+                    unplayed.extend(
+                        episodes
+                            .iter()
+                            .map(|episode| Media::parse(episode, "podcast_episode"))
+                            .filter(|episode| !episode.fully_played),
+                    );
+                    offset = next;
+                }
+                Ok::<_, anyhow::Error>(unplayed)
             })
             .buffered(CONCURRENT_SHOWS)
             .collect::<Vec<_>>()
@@ -702,9 +863,9 @@ impl ApiClient {
                 let mut args = json!({
                     "limit":PAGE_SIZE,
                     "offset":offset,
-                    "order_by":order.order_by(),
                     "favorite":if *favorite {Some(true)} else {None}
                 });
+                order.apply(&mut args, self.schema_at_least(SORT_FIELDS_SCHEMA));
                 if let Some(search) = search {
                     args["search"] = Value::String(search.clone());
                 }
@@ -734,11 +895,25 @@ impl ApiClient {
                 json!({"item_id":id,"provider_instance_id_or_domain":provider}),
                 "track",
             ),
-            Target::Podcast { id, provider } => (
-                "music/podcasts/podcast_episodes".into(),
-                json!({"item_id":id,"provider_instance_id_or_domain":provider}),
-                "podcast_episode",
-            ),
+            Target::Podcast {
+                id,
+                provider,
+                offset,
+            } => {
+                let (episodes, next) = self
+                    .podcast_episodes(id, provider, *offset, false, PAGE_SIZE)
+                    .await?;
+                let items = episodes
+                    .iter()
+                    .map(|episode| Media::parse(episode, "podcast_episode"))
+                    .collect();
+                let next = next.map(|offset| Target::Podcast {
+                    id: id.clone(),
+                    provider: provider.clone(),
+                    offset,
+                });
+                return Ok((items, next));
+            }
             // Shelves are server-defined lists, not paged libraries.
             Target::InProgress => (
                 "music/in_progress_items".into(),
@@ -814,6 +989,16 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
                 action,
             }),
         );
+        // Only a book: MA 2.10.9 ignores a chapter `start_item` for an episode.
+        if media.kind == "audiobook" && !media.uri.is_empty() {
+            entries.push(crate::controls::Entry {
+                section: "Play this item",
+                label: "Chapters…".into(),
+                action: Action::LoadChapters {
+                    uri: media.uri.clone(),
+                },
+            });
+        }
         if matches!(
             media.kind.as_str(),
             "track" | "album" | "artist" | "playlist"
@@ -876,6 +1061,17 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
             },
         });
     }
+    // Reading about an item needs no speaker. Last, so it moves no other entry.
+    if crate::details::offered(&media.kind) && !media.uri.is_empty() {
+        entries.push(crate::controls::Entry {
+            section: "About",
+            label: "Details".into(),
+            action: Action::LoadDetails {
+                uri: media.uri.clone(),
+                title: media.title.clone(),
+            },
+        });
+    }
     if entries.is_empty() {
         app.status = if player.is_none() {
             "Select a speaker in Players first, then choose music".into()
@@ -896,6 +1092,7 @@ pub fn choose(app: &mut App, media: &Media) -> Action {
         error: String::new(),
         filter: String::new(),
         filtering: false,
+        item: String::new(),
     });
     Action::None
 }
@@ -939,6 +1136,7 @@ pub(crate) fn queue_choices(app: &mut App, title: &str, replace: Action, add: Ac
         error: String::new(),
         filter: String::new(),
         filtering: false,
+        item: String::new(),
     });
     Action::None
 }
@@ -1017,6 +1215,15 @@ pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
             }))
         }
         KeyCode::Char('r') => Some(app.music.reload()),
+        KeyCode::Char('i') if key.modifiers.is_empty() => {
+            let media = app.music.page.items.get(app.music.page.cursor).cloned()?;
+            Some(crate::details::open(
+                app,
+                &media.uri,
+                &media.title,
+                &media.kind,
+            ))
+        }
         KeyCode::Char('[') => {
             if app.music.loading {
                 return Some(Action::None);
@@ -1035,7 +1242,16 @@ pub fn key(app: &mut App, key: KeyEvent) -> Option<Action> {
                     search,
                     order,
                 },
-                Target::Library { .. } => {
+                Target::Podcast {
+                    id,
+                    provider,
+                    offset,
+                } if offset >= PAGE_SIZE => Target::Podcast {
+                    id,
+                    provider,
+                    offset: offset - PAGE_SIZE,
+                },
+                Target::Library { .. } | Target::Podcast { .. } => {
                     app.status = "Already on the first page".into();
                     return Some(Action::None);
                 }

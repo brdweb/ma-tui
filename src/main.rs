@@ -19,20 +19,11 @@ fn dispatch(
     } else {
         let searching = matches!(action, ui::Action::Search(_));
         let browsing = matches!(action, ui::Action::Browse { .. });
-        if requests
-            .try_send(ma_tui::controller::Request::new(
-                app.selected_id.clone(),
-                action,
-            ))
-            .is_err()
-        {
-            app.status = "Busy: command not sent; try again".into();
-            if browsing {
-                app.music.apply(
-                    app.music.generation,
-                    Err("Busy: press r to retry loading music".into()),
-                );
-            }
+        if let Err(error) = requests.try_send(ma_tui::controller::Request::new(
+            app.selected_id.clone(),
+            action,
+        )) {
+            ma_tui::presentation::not_sent(app, &error.into_inner().action);
         } else if searching {
             app.results.clear();
             app.status = "Searching…".into();
@@ -42,6 +33,21 @@ fn dispatch(
             app.status = "Command pending…".into();
         }
     }
+}
+
+/// Fictional chapters at fixed starts, for the offline demo.
+fn demo_chapters(names: &[&str]) -> Vec<ma_tui::chapters::Chapter> {
+    names
+        .iter()
+        .zip([0.0, 45.0, 120.0, 200.0])
+        .enumerate()
+        .map(|(index, (name, start))| ma_tui::chapters::Chapter {
+            position: Some(index as u64 + 1),
+            name: (*name).into(),
+            start,
+            end: None,
+        })
+        .collect()
 }
 
 fn demo() -> App {
@@ -66,6 +72,15 @@ fn demo() -> App {
             duration: 240.0,
             ..Default::default()
         }],
+        // Fictional chapters, so chapter display and navigation can be seen
+        // without a server.
+        queue_details: serde_json::json!({"current_item":{"media_item":{
+            "uri":"demo://track/sample","media_type":"track","name":"Sample track"
+        }}}),
+        chapters: ma_tui::chapters::Chapters {
+            uri: "demo://track/sample".into(),
+            list: demo_chapters(&["Opening", "Theme", "Bridge", "Coda"]),
+        },
         elapsed: 72.0,
         duration: 240.0,
         ..App::default()
@@ -107,6 +122,42 @@ async fn main() -> Result<()> {
                         .cloned()
                         .collect();
                     app.status = "Demo search complete (fictional offline data)".into();
+                } else if let ui::Action::LoadDetails { uri, title } = action {
+                    // A fictional item, so the pane can be seen offline.
+                    let item = serde_json::json!({
+                        "name": title,
+                        "duration": 2712,
+                        "season": uri.contains("podcast_episode").then_some(2),
+                        "episode_number": uri.contains("podcast_episode").then_some(14),
+                        "podcast": if uri.contains("podcast_episode") { Some("Fictional show") } else { None }.map(|name| serde_json::json!({ "name": name })),
+                        "authors": if uri.contains("audiobook") { vec!["Fictional author"] } else { vec![] },
+                        "metadata": {
+                            "release_date": "2026-11-01T06:00:00+00:00",
+                            "performers": ["Fictional host", "Fictional guest"],
+                            "links": [{"type": "website", "url": "https://example.com/episode"}],
+                            "chapters": [{"position": 1, "name": "Opening", "start": 0}],
+                            "description": "<p>A <b>fictional</b> item for the offline demo.</p>\
+                                <ul><li>No server was asked</li><li>No audio plays</li></ul>\
+                                <p>Show notes arrive as HTML &amp; are shown as plain text.</p>"
+                        }
+                    });
+                    ma_tui::presentation::apply(
+                        app,
+                        ma_tui::controller::Update::Details {
+                            uri,
+                            result: Ok(item),
+                        },
+                    );
+                } else if let ui::Action::LoadChapters { uri } = action {
+                    // Fictional chapters, so the picker can be seen offline.
+                    let chapters = demo_chapters(&["Opening", "Theme", "Bridge", "Coda"]);
+                    ma_tui::presentation::apply(
+                        app,
+                        ma_tui::controller::Update::ChapterList {
+                            uri,
+                            result: Ok(chapters),
+                        },
+                    );
                 } else if let ui::Action::Browse { generation, target } = action {
                     app.music
                         .apply(generation, Ok((ma_tui::music::demo_listing(&target), None)));
@@ -237,6 +288,15 @@ async fn main() -> Result<()> {
             return Ok(());
         };
         let api = ma_tui::api::ApiClient::new(&config.server, token_value)?;
+        // The schema decides a few request shapes. Until it is known the 2.10.x
+        // shapes are used, which newer servers also accept, so startup does not
+        // wait for it.
+        tokio::spawn({
+            let api = api.clone();
+            async move {
+                let _ = api.refresh_schema().await;
+            }
+        });
         // The visualizer analyzes only what this endpoint plays.
         let spectrum = ma_tui::visualizer::Analyzer::new();
         let audio = if (args.local || config.local_playback) && !args.remote_only {

@@ -149,11 +149,14 @@ playback.
 | z / l | Toggle shuffle / cycle repeat off→all→one |
 | + / - | Volume up/down (the server chooses the step) |
 | Left / Right | Seek backward/forward 10 seconds |
+| ( / ) | Previous / next chapter of the playing audiobook or episode; ( restarts the current chapter after its first few seconds |
 | / | Search; Enter submits, Esc cancels |
 | b / F3 | Open music browser |
 | Enter in music/search | Open a collection/folder, or open a playable item's menu |
 | P in music/search | Open the full playback menu for the highlighted item |
 | f in music/search | Toggle favourite on the highlighted item |
+| i in music/search | Details of a podcast, episode or audiobook: show notes, date, people, links; Esc closes |
+| t in details | Read the episode's transcript, when the server has one (Music Assistant 2.11); t again returns to the details |
 | F | Toggle favourite on the now-playing item |
 | x in music/search | Select or deselect an available, playable track |
 | A in music/search | Choose Replace queue or Add to queue for selected tracks in displayed order |
@@ -195,7 +198,7 @@ With Queue focused, **c** clears its current queue and stops playback. This
 requires an active queue; it never guesses an empty queue ID.
 
 The controls menu covers transport and external sources, mute, power,
-individual/group volume, absolute seek, sleep timers, grouping, sound modes,
+individual/group volume, absolute seek, the playing item's chapters, sleep timers, grouping, sound modes,
 writable player options, queue shuffle/repeat, autoplay/crossfade,
 play/remove/reorder/clear, **Save queue as playlist…**, playback transfer,
 audiobook/podcast speed, and media URIs. Entries are grouped under headings and
@@ -302,16 +305,20 @@ has been tested.
 
 State arrives on Music Assistant's event stream, with polling as a fallback; very
 large queues still cost extra requests when their contents change, and the
-unplayed-podcast list costs one request per subscribed show because the server has
-no filter for it. Output-device changes restart the connection, and runtime
+unplayed-podcast list costs one request per subscribed show, because there is
+no request for it across shows. Music Assistant 2.11 filters each show's
+finished episodes itself; on 2.10.x each show's whole episode list is read and
+filtered here. Output-device changes restart the connection, and runtime
 volume/mute/delay changes are not persisted across restarts.
 
 Album art needs a terminal that draws sixel to look sharp — foot does, Alacritty
 has no image protocol at all — and a multiplexer will generally not forward
 either.
 
-MA-TUI does not administer users, providers, DSP or the MA server. Audiobooks
-have no chapter navigation; the 2.10.5 integration treats a book as one playable item.
+MA-TUI does not administer users, providers, DSP or the MA server. Only an
+audiobook can be started at a chosen chapter (**Chapters…** in its item menu);
+Music Assistant 2.10.9 ignores a chapter start for a podcast episode, so an
+episode's chapters are reached with ( and ) once it is playing.
 Player support varies; server rejections appear as command errors. Playlist
 additions finish in the background on the server, and radio uses Music
 Assistant's dynamic radio playlists. Prolonged playback, broader hardware and

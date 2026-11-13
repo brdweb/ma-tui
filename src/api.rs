@@ -52,6 +52,9 @@ pub struct ApiClient {
     http: reqwest::Client,
     endpoint: url::Url,
     token: String,
+    /// The server's API schema from `/info`, shared by every clone; 0 until
+    /// known. Unknown means 2.10.x behaviour.
+    schema: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 impl std::fmt::Debug for ApiClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -106,6 +109,27 @@ impl ApiClient {
         Ok(version)
     }
 
+    /// The API schema the server last reported, if it reported one.
+    pub fn schema(&self) -> Option<u32> {
+        match self.schema.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => None,
+            schema => Some(schema),
+        }
+    }
+
+    /// Whether the server reported at least schema `minimum`. An unknown
+    /// schema is treated as the oldest supported server (2.10.x), so this is
+    /// false until `/info` has said otherwise.
+    pub fn schema_at_least(&self, minimum: u32) -> bool {
+        self.schema().is_some_and(|schema| schema >= minimum)
+    }
+
+    /// Read `/info` again, so `schema` follows a server that was upgraded
+    /// while this client was running.
+    pub async fn refresh_schema(&self) -> Result<()> {
+        self.server_version().await.map(|_| ())
+    }
+
     async fn server_version(&self) -> Result<String> {
         let mut endpoint = self.endpoint.clone();
         endpoint.set_path(&format!(
@@ -122,6 +146,13 @@ impl ApiClient {
             .json()
             .await
             .map_err(|_| anyhow!("This URL did not return Music Assistant server information; use the direct Music Assistant base URL"))?;
+        // Anything but a positive whole number is no schema at all.
+        let schema = value["schema_version"]
+            .as_u64()
+            .and_then(|schema| u32::try_from(schema).ok())
+            .unwrap_or(0);
+        self.schema
+            .store(schema, std::sync::atomic::Ordering::Relaxed);
         let version = text(&value, "server_version");
         if version.is_empty() {
             return Err(anyhow!(
@@ -166,6 +197,7 @@ impl ApiClient {
                 .map_err(|_| anyhow!("Unable to initialize HTTP client"))?,
             endpoint,
             token: token.into(),
+            schema: Default::default(),
         })
     }
     pub(crate) async fn command(&self, command: &str, args: Value) -> Result<Value> {
@@ -341,6 +373,24 @@ impl ApiClient {
         }
         Ok(())
     }
+    /// Replace the queue with an audiobook and start at one of its chapters.
+    /// The server matches `start_item` against each chapter's `position`
+    /// (`get_audiobook_resume_point`, server 2.10.9), as a string.
+    pub async fn play_chapter(&self, player_id: &str, uri: &str, chapter: u64) -> Result<()> {
+        let q = self.active_queue(player_id).await?;
+        self.command(
+            "player_queues/play_media",
+            json!({
+                "queue_id":text(&q,"queue_id"),
+                "media":uri,
+                "option":"replace",
+                "start_item":chapter.to_string(),
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn play_next_uri(&self, player_id: &str, uri: &str) -> Result<()> {
         self.media(player_id, uri, "next").await
     }
@@ -416,12 +466,20 @@ impl ApiClient {
         Ok(())
     }
 
+    /// The full item behind a URI. Listings and queue items can be slim
+    /// summaries; this is the one that carries everything, chapters included.
+    pub async fn item(&self, uri: &str) -> Result<Value> {
+        if uri.is_empty() {
+            return Err(anyhow!("No item to look up"));
+        }
+        self.command("music/item_by_uri", json!({ "uri": uri }))
+            .await
+    }
+
     // `music/item_by_uri` calls `get_item` (music.py:1088-1099), whose
     // resolver prefers a library row when one exists (base.py:597-616).
     async fn library_item_id(&self, uri: &str) -> Result<String> {
-        let item = self
-            .command("music/item_by_uri", json!({"uri":uri}))
-            .await?;
+        let item = self.item(uri).await?;
         if item["provider"].as_str() != Some("library") {
             return Err(anyhow!("This item is not in your library"));
         }
@@ -442,10 +500,14 @@ impl ApiClient {
     /// Load one bounded page; 500 editable playlists is enough for this picker.
     pub async fn editable_playlists(&self) -> Result<Vec<crate::music::Media>> {
         let playlists = self
-            .command(
-                "music/playlists/library_items",
-                json!({"limit":500,"offset":0,"order_by":"sort_name"}),
-            )
+            .command("music/playlists/library_items", {
+                let mut args = json!({"limit":500,"offset":0});
+                crate::music::Order::Name.apply(
+                    &mut args,
+                    self.schema_at_least(crate::music::SORT_FIELDS_SCHEMA),
+                );
+                args
+            })
             .await?;
         let playlists = playlists
             .as_array()
