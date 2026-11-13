@@ -254,11 +254,17 @@ impl Media {
         // type reads better than a provider instance id, which means nothing to
         // anyone reading it.
         let belongs = crate::api::byline(v);
-        let detail = if belongs.is_empty() {
-            clean(&format!("{}{progress}", readable(&kind)))
+        let belongs = if belongs.is_empty() {
+            readable(&kind)
         } else {
-            clean(&format!("{belongs}{progress}"))
+            belongs
         };
+        // When an episode came out matters as much as which show it is from.
+        let published = match release_date(v) {
+            Some(date) if kind == "podcast_episode" => format!(" · {date}"),
+            _ => String::new(),
+        };
+        let detail = clean(&format!("{belongs}{published}{progress}"));
         Self {
             title: clean(&value("name")),
             detail,
@@ -359,6 +365,18 @@ fn position(ms: u64) -> String {
         (hours, minutes, seconds) => format!("{hours}:{minutes:02}:{seconds:02}"),
     }
 }
+/// The calendar date an item was released, from `metadata.release_date`.
+/// The server sends an ISO 8601 timestamp (the podcast providers set it in
+/// UTC); its date is shown as sent, without converting time zones.
+pub fn release_date(v: &Value) -> Option<String> {
+    let date = v["metadata"]["release_date"].as_str()?.get(..10)?;
+    let shaped = date.bytes().enumerate().all(|(index, byte)| match index {
+        4 | 7 => byte == b'-',
+        _ => byte.is_ascii_digit(),
+    });
+    shaped.then(|| date.to_owned())
+}
+
 fn clean(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).take(512).collect()
 }
@@ -370,17 +388,17 @@ pub fn demo_listing(target: &Target) -> Vec<Media> {
         Target::Library { kind, .. } => kind.media_type(),
         Target::Artist { .. } => "album",
         Target::Providers { .. } => "playlist",
+        Target::Podcast { .. } | Target::UnplayedEpisodes => "podcast_episode",
         Target::Album { .. }
         | Target::Playlist { .. }
         | Target::ArtistTracks { .. }
-        | Target::Podcast { .. }
         | Target::InProgress
         | Target::RecentlyAdded
-        | Target::RecentlyPlayed
-        | Target::UnplayedEpisodes => "track",
+        | Target::RecentlyPlayed => "track",
     };
     vec![Media::parse(
-        &json!({"name":format!("Sample {kind} — offline preview"),"item_id":"sample","provider":"demo","uri":format!("demo://{kind}/sample"),"media_type":kind,"artists":[{"name":"Fictional artist"}]}),
+        &json!({"name":format!("Sample {kind} — offline preview"),"item_id":"sample","provider":"demo","uri":format!("demo://{kind}/sample"),"media_type":kind,"artists":[{"name":"Fictional artist"}],
+                "podcast":{"name":"Fictional show"},"metadata":{"release_date":"2026-11-01T06:00:00+00:00"}}),
         kind,
     )]
 }
