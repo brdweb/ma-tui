@@ -126,19 +126,6 @@ fn published(item: &Value) -> Option<String> {
     shaped.then(|| date.to_owned())
 }
 
-/// The publisher's numbering, `S2 E14`, `E14` or `S2` (2.11.0b4 and later).
-/// The same rule as the episode rows (#58); fold the two together once both
-/// are merged.
-fn numbering(item: &Value) -> Option<String> {
-    let number = |key: &str| item[key].as_u64().filter(|n| *n > 0);
-    match (number("season"), number("episode_number")) {
-        (Some(season), Some(episode)) => Some(format!("S{season} E{episode}")),
-        (None, Some(episode)) => Some(format!("E{episode}")),
-        (Some(season), None) => Some(format!("S{season}")),
-        (None, None) => None,
-    }
-}
-
 /// Whole seconds as `h:mm:ss`, or `m:ss` under an hour.
 fn length(seconds: u64) -> String {
     let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
@@ -166,7 +153,10 @@ pub fn facts(item: &Value) -> Vec<(&'static str, String)> {
             "Show",
             line(item["podcast"]["name"].as_str().unwrap_or_default()),
         ),
-        ("Episode", numbering(item).unwrap_or_default()),
+        (
+            "Episode",
+            crate::music::episode_number(item).unwrap_or_default(),
+        ),
         ("Authors", names(&item["authors"])),
         ("Narrators", names(&item["narrators"])),
         ("Published", published(item).unwrap_or_default()),
