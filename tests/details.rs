@@ -200,3 +200,28 @@ fn the_pane_draws_and_scrolling_stops_at_the_end() {
         "clamped to the content: {scroll}"
     );
 }
+
+#[test]
+fn the_end_of_wide_text_is_reachable() {
+    // Each paragraph is half as many characters as columns. Counting
+    // characters made the clamp stop scrolling before the end.
+    let mut app = connected();
+    let mut pane = Details::loading("u", "Title");
+    let mut description: Vec<String> = (0..60).map(|_| "長".repeat(40)).collect();
+    description.push("END".into());
+    pane.fill(&json!({"name":"Wide notes","metadata":{"description": description.join("\n\n")}}));
+    pane.scroll = u16::MAX;
+    app.details = Some(pane);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 30)).unwrap();
+    terminal
+        .draw(|frame| ma_tui::ui::draw(frame, &mut app))
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(screen.contains("END"), "the end is reachable");
+}

@@ -202,7 +202,8 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
 fn wrapped(text: &str, width: usize) -> usize {
     let (mut rows, mut used) = (1, 0);
     for word in text.split(' ') {
-        let length = word.chars().count();
+        // Columns, as the paragraph wraps them: a wide character takes two.
+        let length = ratatui::text::Span::raw(word).width();
         if used > 0 && used + 1 + length > width {
             rows += 1;
             used = 0;
