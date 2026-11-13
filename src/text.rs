@@ -99,8 +99,7 @@ pub fn plain_cut(source: &str, limit: usize) -> (String, bool) {
             Some((name, closing, used)) => {
                 rest = &rest[used..];
                 if !closing && SKIPPED.contains(&name.as_str()) {
-                    let close = format!("</{name}");
-                    let end = find_ignoring_case(rest, &close).unwrap_or(rest.len());
+                    let end = find_closing(rest, &name).unwrap_or(rest.len());
                     rest = &rest[end..];
                 } else if name == "li" && !closing {
                     out.push_str("\n• ");
@@ -197,6 +196,27 @@ fn find_ignoring_case(haystack: &str, needle: &str) -> Option<usize> {
         .enumerate()
         .find(|(_, window)| window[0] == first && window.eq_ignore_ascii_case(needle))
         .map(|(index, _)| index)
+}
+
+/// Where the tag closing `name` starts: `</name` followed by something that
+/// cannot continue a tag name, so `</scripture>` does not end a script.
+fn find_closing(haystack: &str, name: &str) -> Option<usize> {
+    let close = format!("</{name}");
+    let mut from = 0;
+    while let Some(found) = find_ignoring_case(&haystack[from..], &close) {
+        let start = from + found;
+        let after = start + close.len();
+        if !haystack
+            .as_bytes()
+            .get(after)
+            .is_some_and(|b| b.is_ascii_alphanumeric())
+        {
+            return Some(start);
+        }
+        // `</` and the name are ASCII, so this stays on a character boundary.
+        from = start + 2;
+    }
+    None
 }
 
 /// Characters that draw nothing but can reorder or hide text: bidirectional

@@ -135,3 +135,15 @@ fn a_body_cut_at_the_byte_cap_still_says_so() {
     assert!(text.chars().count() <= 300);
     assert_eq!(plain_cut("short", 100), ("short".to_owned(), false));
 }
+
+#[test]
+fn a_longer_tag_name_does_not_end_a_skipped_element() {
+    assert_eq!(
+        plain(
+            "<script>const example = '</scripture>'; alert('hidden');</script><p>Visible</p>",
+            1000
+        ),
+        "Visible"
+    );
+    assert_eq!(plain("<style>a{}</styles>b{}</STYLE>Shown", 1000), "Shown");
+}
