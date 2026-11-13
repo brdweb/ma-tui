@@ -45,6 +45,11 @@ pub struct Details {
     pub transcript: Option<crate::transcript::Transcript>,
     /// Whether the transcript is shown in place of the details.
     pub showing_transcript: bool,
+    /// The transcript's timed cues, empty when it has none.
+    pub cues: Vec<crate::transcript::Cue>,
+    /// Whether the transcript scrolls itself to the cue being played. Off once
+    /// the reader scrolls; End turns it back on.
+    pub following: bool,
 }
 
 impl Details {
@@ -54,6 +59,7 @@ impl Details {
             uri: uri.into(),
             title: title.into(),
             loading: true,
+            following: true,
             ..Self::default()
         }
     }
@@ -228,13 +234,28 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') | KeyCode::Backspace => {
             app.details = None;
         }
-        KeyCode::Down | KeyCode::Char('j') => details.scroll = details.scroll.saturating_add(1),
-        KeyCode::Up | KeyCode::Char('k') => details.scroll = details.scroll.saturating_sub(1),
+        // Reading by hand stops the transcript following playback.
+        KeyCode::Down | KeyCode::Char('j') => {
+            details.following = false;
+            details.scroll = details.scroll.saturating_add(1)
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            details.following = false;
+            details.scroll = details.scroll.saturating_sub(1)
+        }
         KeyCode::PageDown | KeyCode::Char(' ') => {
+            details.following = false;
             details.scroll = details.scroll.saturating_add(10)
         }
-        KeyCode::PageUp => details.scroll = details.scroll.saturating_sub(10),
-        KeyCode::Home => details.scroll = 0,
+        KeyCode::PageUp => {
+            details.following = false;
+            details.scroll = details.scroll.saturating_sub(10)
+        }
+        KeyCode::Home => {
+            details.following = false;
+            details.scroll = 0
+        }
+        KeyCode::End => details.following = true,
         KeyCode::Char('t') => {
             let Some((item_id, provider)) = details.transcript_source.clone() else {
                 app.status = "No transcript for this item".into();
@@ -261,6 +282,36 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
     Action::None
 }
 
+/// The cues as lines, the one spoken at `position` marked. Returns the index
+/// in `lines` of the spoken cue's line.
+fn cue_lines(
+    lines: &mut Vec<Line<'static>>,
+    cues: &[crate::transcript::Cue],
+    position: f64,
+    palette: crate::theme::Palette,
+) -> Option<usize> {
+    let now = crate::transcript::current(cues, position);
+    let mut spoken = None;
+    for (index, cue) in cues.iter().enumerate() {
+        let playing = now == Some(index);
+        let mut spans = vec![Span::raw(if playing { "▶ " } else { "  " })];
+        if !cue.speaker.is_empty() {
+            spans.push(Span::styled(
+                format!("{}: ", cue.speaker),
+                Style::default().fg(palette.accent),
+            ));
+        }
+        spans.push(Span::raw(cue.text.clone()));
+        let mut line = Line::from(spans);
+        if playing {
+            line = line.style(Style::default().add_modifier(Modifier::BOLD));
+            spoken = Some(lines.len());
+        }
+        lines.push(line);
+    }
+    spoken
+}
+
 /// Rows a line takes when wrapped at word boundaries, as the paragraph does.
 fn wrapped(text: &str, width: usize) -> usize {
     let (mut rows, mut used) = (1, 0);
@@ -283,19 +334,56 @@ fn wrapped(text: &str, width: usize) -> usize {
 /// The pane, in the browser column.
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let palette = app.palette;
+    // Where playback is in this episode, when it is the one playing.
+    let position = app
+        .details
+        .as_ref()
+        .filter(|details| crate::chapters::playing_uri(&app.queue_details) == details.uri)
+        .map(|_| app.elapsed);
     let Some(details) = &mut app.details else {
         return;
     };
-    let label = if details.showing_transcript {
-        "DETAILS · TRANSCRIPT"
-    } else {
-        "DETAILS"
+    // Timed cues of the playing episode are shown in place of the text, so
+    // the line being spoken can be marked and kept in view.
+    let live = details.showing_transcript
+        && !details.cues.is_empty()
+        && matches!(
+            details.transcript,
+            Some(crate::transcript::Transcript::Text { .. })
+        );
+    let position = position.filter(|_| live);
+    let label = match (details.showing_transcript, position.is_some()) {
+        (true, true) => "DETAILS · TRANSCRIPT · LIVE",
+        (true, false) => "DETAILS · TRANSCRIPT",
+        _ => "DETAILS",
     };
     let area = crate::ui::heading(frame, area, palette, label, true);
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+    // While following, a fixed row under the hints names who is speaking.
+    let speaking = Constraint::Length(u16::from(position.is_some()));
+    let parts = Layout::vertical([Constraint::Length(1), speaking, Constraint::Min(1)]).split(area);
+    let rows = [parts[0], parts[2]];
     let dim = Style::default().fg(palette.secondary);
+    if let Some(position) = position {
+        let speaker = crate::transcript::current(&details.cues, position)
+            .map(|index| details.cues[index].speaker.clone())
+            .filter(|speaker| !speaker.is_empty());
+        frame.render_widget(
+            Paragraph::new(match speaker {
+                Some(speaker) => Line::from(vec![
+                    Span::styled("Now speaking: ", dim),
+                    Span::styled(speaker, Style::default().fg(palette.accent)),
+                ]),
+                None => Line::styled("Following playback", dim),
+            }),
+            parts[1],
+        );
+    }
     frame.render_widget(
-        Paragraph::new(if details.transcript_source.is_some() {
+        Paragraph::new(if position.is_some() && details.following {
+            "following playback · ↑↓ scroll to read freely · t details · Esc returns"
+        } else if position.is_some() {
+            "↑↓ scroll · End follow playback · t details · Esc returns"
+        } else if details.transcript_source.is_some() {
             "↑↓ scroll · PgUp/PgDn page · t transcript/details · Esc returns"
         } else {
             "↑↓ scroll · PgUp/PgDn page · Esc returns"
@@ -316,6 +404,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::raw(value.clone()),
         ]));
     }
+    // The line of the cue being spoken, when following playback.
+    let mut spoken = None;
     if details.showing_transcript {
         use crate::transcript::Transcript;
         lines.truncate(2);
@@ -331,7 +421,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     ));
                     lines.push(Line::default());
                 }
-                lines.extend(body.lines().map(|text| Line::raw(text.to_owned())));
+                match position {
+                    Some(position) => {
+                        spoken = cue_lines(&mut lines, &details.cues, position, palette);
+                    }
+                    None => lines.extend(body.lines().map(|text| Line::raw(text.to_owned()))),
+                }
             }
             Some(Transcript::Missing) => {
                 lines.push(Line::styled("This episode has no transcript", dim))
@@ -364,7 +459,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     // Wrapped height, so scrolling stops at the end rather than past it.
     let width = rows[1].width.max(1) as usize;
-    let height: usize = lines
+    let heights: Vec<usize> = lines
         .iter()
         .map(|line| {
             let text: String = line
@@ -374,7 +469,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                 .collect();
             wrapped(&text, width)
         })
-        .sum();
+        .collect();
+    let height: usize = heights.iter().sum();
+    // Keep the spoken line a third of the way down while following.
+    if let Some(line) = spoken.filter(|_| details.following) {
+        let above: usize = heights[..line].iter().sum();
+        let lead = rows[1].height as usize / 3;
+        details.scroll = above.saturating_sub(lead).min(u16::MAX as usize) as u16;
+    }
     let last = height.saturating_sub(rows[1].height as usize);
     details.scroll = details.scroll.min(last.min(u16::MAX as usize) as u16);
     frame.render_widget(
