@@ -60,7 +60,7 @@ pub fn plain_cut(source: &str, limit: usize) -> (String, bool) {
     let source = &source[..end];
     // Plain text keeps its own line breaks; in HTML they are only spacing.
     let html = looks_like_html(source);
-    let mut out = String::with_capacity(source.len().min(limit * 4));
+    let mut out = String::with_capacity(source.len().min(limit.saturating_mul(4)));
     let mut rest = source;
     // Once a tag scan has run off the end, quotes are no longer trusted, and
     // once no `>` is left at all, no later `<` can open a tag. Both keep the

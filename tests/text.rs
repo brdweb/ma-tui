@@ -147,3 +147,9 @@ fn a_longer_tag_name_does_not_end_a_skipped_element() {
     );
     assert_eq!(plain("<style>a{}</styles>b{}</STYLE>Shown", 1000), "Shown");
 }
+
+#[test]
+fn an_unbounded_limit_does_not_overflow() {
+    assert_eq!(plain("<b>short</b>", usize::MAX), "short");
+    assert_eq!(plain_cut("short", usize::MAX), ("short".to_owned(), false));
+}
