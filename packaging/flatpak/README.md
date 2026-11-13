@@ -1,16 +1,16 @@
 # Flatpak bundle
 
-The current candidate is MA-TUI 1.1.1, targeting Music Assistant stable 2.10.5.
+The current candidate is MA-TUI 1.2.0, targeting Music Assistant stable 2.10.9.
 Candidate qualification evidence and remaining desktop/publication gates are
 documented in `docs/releasing.md`.
 
 After an authorized release is published, download
-`ma-tui-v1.1.1-linux-x86_64.flatpak` and `SHA256SUMS` from
+`ma-tui-v1.2.0-linux-x86_64.flatpak` and `SHA256SUMS` from
 the GitHub release, then run:
 
 ```sh
 sha256sum --ignore-missing -c SHA256SUMS
-flatpak install --user ./ma-tui-v1.1.1-linux-x86_64.flatpak
+flatpak install --user ./ma-tui-v1.2.0-linux-x86_64.flatpak
 flatpak run io.github.brdweb.MaTui
 ```
 
@@ -61,7 +61,7 @@ headers and `desktop-file-validate`. No flatpak-builder or compiler SDK is neede
 cargo build --release --locked
 python3 packaging/arch/stage.py
 python3 packaging/flatpak/build.py
-flatpak install --user --noninteractive .tools/flatpak-package/ma-tui-v1.1.1-linux-x86_64.flatpak
+flatpak install --user --noninteractive .tools/flatpak-package/ma-tui-v1.2.0-linux-x86_64.flatpak
 flatpak run io.github.brdweb.MaTui --version
 flatpak run io.github.brdweb.MaTui --demo --snapshot
 flatpak run io.github.brdweb.MaTui --list-devices

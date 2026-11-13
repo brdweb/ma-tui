@@ -4,9 +4,9 @@ This wraps the Linux x86-64 release executable with Arch's real `makepkg`.
 It is not a source rebuild on Arch, AUR submission, signed release or deployment.
 No install script, service, credentials or personal configuration is included.
 
-The current candidate is MA-TUI 1.1.1, targeting Music Assistant stable 2.10.5.
-Native and Arch candidate checks passed, along with a disposable real 2.10.5
-null-output smoke. Final committed-build package and desktop qualification
+The current candidate is MA-TUI 1.2.0, targeting Music Assistant stable 2.10.9.
+Its Sendspin client passed null-output checks against disposable 2.10.9 and
+2.11.0b8 servers and a 2.10.4 server. Final committed-build package and desktop qualification
 remain publication gates; see `docs/releasing.md` for evidence and limits.
 
 ## Build and test
@@ -68,7 +68,7 @@ the base image alone does not make that update or the binary build reproducible.
 host. `Cargo.lock` and the generated PKGBUILD source checksum identify the inputs.
 
 The result is named in `.tools/arch-package/PACKAGE-NAME`; for this candidate it is
-`ma-tui-1.1.1-1-x86_64.pkg.tar.zst`. Version, glibc requirement and install
+`ma-tui-1.2.0-1-x86_64.pkg.tar.zst`. Version, glibc requirement and install
 instructions are derived from the manifest and built executable. The desktop
 launcher is included and validated during package installation.
 Copy only a successfully verified package into ignored `dist/`, and create its
