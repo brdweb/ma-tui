@@ -1,6 +1,39 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 — 2026-11-13
+
+### Podcasts and audiobooks
+
+- Chapters of the playing audiobook or episode are loaded and shown in the
+  playback controls. ( and ) step to the previous or next chapter, and ( restarts
+  the current one after its first few seconds. An audiobook can also be started
+  at a chosen chapter from **Chapters…** in its item menu. Music Assistant 2.10.9
+  ignores a chapter start for a podcast episode, so an episode's chapters are
+  reached once it is playing.
+- **i** in Music or Search opens a details pane for a podcast, episode or
+  audiobook: show notes, date, people, season and episode numbers, and links.
+  Remote descriptions are reduced to plain text: markup is dropped, entities
+  are decoded, and control and invisible formatting characters are removed.
+- Episode rows show their publish date and, where the feed gives them, season
+  and episode numbers.
+- Episode listings are paged and ordered by the episode's position, newest
+  first, so a show longer than one server page can be read in full.
+- **Unplayed podcasts** asks Music Assistant 2.11 to filter finished episodes
+  itself, and follows each show's pages past a run of finished ones. On 2.10.x
+  each show's episodes are read and filtered here, as before.
+- Transcripts (Music Assistant 2.11): **t** in an episode's details reads its
+  transcript when the server has one. While that episode plays, the pane follows
+  the line being spoken and names the speaker. Scrolling by hand stops
+  following, and **End** resumes it. Very long transcripts are shortened, and
+  the pane says so.
+
+### Music Assistant compatibility
+
+- Target stable Music Assistant 2.10.9. MA-TUI reads the server's API schema
+  version and uses the 2.11 forms where they differ: the new library sort
+  arguments, and the per-user favourites event, including for rows shown under
+  a provider's URI. Year sort is not offered for tracks.
+- Features that need 2.11 stay hidden on 2.10.x, where behaviour is unchanged.
 
 ### Local playback
 
@@ -9,6 +42,21 @@
   which stops several seconds of up-to-4% speed correction after playback
   starts on some ALSA-over-PulseAudio/PipeWire setups, and it adds unsigned
   24-bit output. The protocol and MA-TUI's use of the API are unchanged.
+- Live checks with 0.3.8 passed registration, stream start, monitored
+  non-silent output, seek, pause and resume, volume and mute events, a track
+  change and reconnect against disposable 2.10.9 and 2.11.0b8 servers and a
+  2.10.4 server. Output went to ALSA's null sink, so audible playback was not
+  checked.
+
+### Dependencies
+
+- MPRIS moves to zbus 6. Tokio, rustls-webpki/webpki-roots, quinn-proto and
+  quinn-udp are updated for RustSec advisories.
+
+### Not yet validated
+
+- The 2.11 features were tested against recorded fixtures and a disposable
+  2.11.0b8 server, not a real 2.11 library.
 
 ## 1.1.1 — 2026-10-09
 

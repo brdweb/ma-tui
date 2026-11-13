@@ -119,6 +119,36 @@ all 402 external registry packages from the v1.1.0 lockfile fixed the build.
 Flatpak build and received an “accept” recommendation. This is why vendor
 regeneration and upstream build/report verification are mandatory release steps.
 
+## 1.2.0 preparation (2026-11-13)
+
+1.2.0 adds chapters, the details pane, episode dates and numbers, paged
+episode listings, the server-side unplayed filter, transcripts, the 2.11 sort
+and favourites forms, and Sendspin 0.3.8. It retargets stable Music Assistant
+2.10.9 (Issue #68). Publication, tagging and the Omapak update still need
+the maintainer's explicit authorization.
+
+### Candidate evidence
+
+- Built on a NixOS host with Rust 1.95 through nix-shell. Formatting passed and
+  311 tests passed. Strict Clippy reports only the two pre-existing
+  `collapsible_match` hits in `src/audio.rs` from that clippy version; it passes
+  with that lint allowed, and CI's pinned toolchain passes it. The optimized
+  executable reports `ma-tui 1.2.0`. `cargo audit` with 1509 advisories found
+  none beyond the existing allowed `rustix` warning.
+- The release binary passed the terminal, connected-controller, password
+  settings and token settings PTY fixtures. On NixOS the settings fixture's
+  secret-tool double needs `#!/usr/bin/env python3`, and it was run from a
+  scratch copy with only that line changed. Its background `/ws` assertions
+  appear as before.
+- Sendspin 0.3.8 live checks (null output, no audible playback) passed against
+  disposable 2.10.9 and 2.11.0b8 servers and the maintainer's 2.10.4 server;
+  see "Stable target review (2026-11-12)" in `docs/architecture.md`.
+- The host binary links the Nix store, so it cannot be packaged for Arch or
+  Flatpak. Arch staging and container verification, and the Flatpak build and
+  verifier, run after merge with the CI `ma-tui-release-build` artifact of the
+  merged main commit (step 4). The Flatpak verifier's disposable keyring item
+  and silent output stream need the maintainer's authorization.
+
 ## 1.1.1 publication (2026-10-09)
 
 - Published [v1.1.1](https://github.com/brdweb/ma-tui/releases/tag/v1.1.1)
