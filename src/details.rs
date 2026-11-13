@@ -114,18 +114,6 @@ fn names(list: &Value) -> String {
         .join(", ")
 }
 
-/// The calendar date of `metadata.release_date`, an ISO 8601 timestamp, as
-/// sent. The same rule as the episode rows' date (#44); fold the two together
-/// once both are merged.
-fn published(item: &Value) -> Option<String> {
-    let date = item["metadata"]["release_date"].as_str()?.get(..10)?;
-    let shaped = date.bytes().enumerate().all(|(index, byte)| match index {
-        4 | 7 => byte == b'-',
-        _ => byte.is_ascii_digit(),
-    });
-    shaped.then(|| date.to_owned())
-}
-
 /// Whole seconds as `h:mm:ss`, or `m:ss` under an hour.
 fn length(seconds: u64) -> String {
     let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
@@ -159,7 +147,10 @@ pub fn facts(item: &Value) -> Vec<(&'static str, String)> {
         ),
         ("Authors", names(&item["authors"])),
         ("Narrators", names(&item["narrators"])),
-        ("Published", published(item).unwrap_or_default()),
+        (
+            "Published",
+            crate::music::release_date(item).unwrap_or_default(),
+        ),
         (
             "Duration",
             item["duration"]
