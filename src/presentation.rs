@@ -449,6 +449,7 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
                         error: String::new(),
                         filter: String::new(),
                         filtering: false,
+                        item: String::new(),
                     });
                 }
                 Err(error) => app.status = format!("Could not load playlists: {error}"),
