@@ -380,7 +380,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     frame.render_widget(
         Paragraph::new(if position.is_some() && details.following {
-            "following playback · ↑↓ scroll to read freely · t details · Esc returns"
+            "following playback · ↑↓ read freely · t details · Esc returns"
         } else if position.is_some() {
             "↑↓ scroll · End follow playback · t details · Esc returns"
         } else if details.transcript_source.is_some() {
