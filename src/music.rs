@@ -679,6 +679,9 @@ impl ApiClient {
         provider: &str,
         offset: usize,
         unplayed: bool,
+        // How many to return from a server that sends the whole show; one
+        // that pages always returns its own page of `PAGE_SIZE`.
+        size: usize,
     ) -> Result<(Vec<Value>, Option<usize>)> {
         let paged = self.schema_at_least(PAGED_EPISODES_SCHEMA);
         let (limit, from) = if paged { (PAGE_SIZE, offset) } else { (0, 0) };
@@ -705,8 +708,8 @@ impl ApiClient {
             episodes.retain(|episode| episode["fully_played"] != true);
         }
         let total = episodes.len();
-        let page: Vec<Value> = episodes.into_iter().skip(offset).take(PAGE_SIZE).collect();
-        let next = (offset + PAGE_SIZE < total).then_some(offset + PAGE_SIZE);
+        let page: Vec<Value> = episodes.into_iter().skip(offset).take(size).collect();
+        let next = (offset + size < total).then_some(offset + size);
         Ok((page, next))
     }
 }
@@ -749,8 +752,10 @@ impl ApiClient {
                     let Some(from) = offset.filter(|_| unplayed.len() < MAX_UNPLAYED) else {
                         break;
                     };
-                    let (episodes, next) =
-                        self.podcast_episodes(&id, &provider, from, true).await?;
+                    // A server sending the whole show is read once.
+                    let (episodes, next) = self
+                        .podcast_episodes(&id, &provider, from, true, MAX_UNPLAYED)
+                        .await?;
                     unplayed.extend(
                         episodes
                             .iter()
@@ -838,7 +843,9 @@ impl ApiClient {
                 provider,
                 offset,
             } => {
-                let (episodes, next) = self.podcast_episodes(id, provider, *offset, false).await?;
+                let (episodes, next) = self
+                    .podcast_episodes(id, provider, *offset, false, PAGE_SIZE)
+                    .await?;
                 let items = episodes
                     .iter()
                     .map(|episode| Media::parse(episode, "podcast_episode"))
