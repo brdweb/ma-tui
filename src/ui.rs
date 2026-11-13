@@ -1132,17 +1132,12 @@ fn draw_now_playing(frame: &mut Frame, app: &mut App, area: Rect, strip: u16) {
     // The chapter sits beside the byline, taking at most half of its room.
     let chapter = crate::chapters::label(app.chapters.current(&app.queue_details), app.elapsed)
         .unwrap_or_default();
-    let chapter_width = (chapter.chars().count() as u16)
+    // Measured in columns, not characters: a wide name would otherwise be
+    // clipped by the layout instead of ending in an ellipsis.
+    let chapter_width = (columns(&chapter) as u16)
         .saturating_add(2)
         .min(rows[2].width.saturating_sub(16) / 2);
-    let room = chapter_width.saturating_sub(2) as usize;
-    let chapter = if chapter.chars().count() > room {
-        let mut cut: String = chapter.chars().take(room.saturating_sub(1)).collect();
-        cut.push('…');
-        cut
-    } else {
-        chapter
-    };
+    let chapter = fit_columns(&chapter, chapter_width.saturating_sub(2) as usize);
     let second = Layout::horizontal([
         Constraint::Min(10),
         Constraint::Length(if chapter.is_empty() { 0 } else { chapter_width }),
@@ -1358,6 +1353,33 @@ fn track_items<'a>(
             ])
         })
         .collect()
+}
+
+/// How many terminal columns `text` takes.
+fn columns(text: &str) -> usize {
+    ratatui::text::Span::raw(text).width()
+}
+
+/// `text` cut to at most `width` columns, ending in `…` when cut.
+fn fit_columns(text: &str, width: usize) -> String {
+    if columns(text) <= width {
+        return text.to_owned();
+    }
+    let mut cut = String::new();
+    let mut used = 1; // the ellipsis
+    for c in text.chars() {
+        let mut buffer = [0; 4];
+        let wide = columns(c.encode_utf8(&mut buffer));
+        if used + wide > width {
+            break;
+        }
+        used += wide;
+        cut.push(c);
+    }
+    if width > 0 {
+        cut.push('…');
+    }
+    cut
 }
 
 fn truncate(text: &str, width: usize) -> String {
