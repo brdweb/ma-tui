@@ -313,10 +313,15 @@ audiobook does not open into a listing: it is one playable item with a resume
 point, and its chapters come from the full item (see Chapters below). Its item
 menu offers **Chapters…** to start at one.
 
-There is no server-side filter for unplayed episodes: `library_items` takes
-`played_only`, which selects the opposite, and has no unplayed equivalent. The
-unplayed list is therefore assembled here — the shows are listed, then each is
-asked for its episodes and filtered — which is one request per subscription.
+There is no server request for unplayed episodes across shows: `library_items`
+takes `played_only`, which selects the opposite, and has no unplayed
+equivalent. The unplayed list is therefore assembled here: the shows are
+listed, then each is asked for its episodes, which is one request per
+subscription. From 2.11.0b6 (schema 99), `podcast_episodes` takes
+`fully_played: false`, so each show filters itself and returns its newest
+unplayed page (`None` progress counts as unplayed, as it does here). On 2.10.x
+each show's whole list is filtered here before its first page is cut, so older
+unplayed episodes behind a hundred played ones are still found.
 They overlap a few at a time rather than running in a loop, because the server
 answering them is the one also serving the audio, and the result is capped so a
 large subscription list cannot become an unbounded read.
