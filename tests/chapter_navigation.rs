@@ -170,6 +170,14 @@ fn the_player_shows_the_chapter_and_the_hints_name_the_keys() {
     assert!(screen.contains("Ch 2/2 · The long middle"));
     assert!(screen.contains("(/) chapter"));
 
+    // A wide name is cut by columns, so it still ends in an ellipsis instead
+    // of being clipped mid-character by the layout.
+    let wide = "長".repeat(60);
+    let mut app = playing_app(list(&[("Opening", 0.0), (wide.as_str(), 60.0)]));
+    let screen = render(&mut app);
+    assert!(screen.contains("Ch 2/2 · 長"), "{screen}");
+    assert!(screen.replace(' ', "").contains("長…"), "{screen}");
+
     let mut plain = playing_app(vec![]);
     let screen = render(&mut plain);
     assert!(!screen.contains("Ch "));

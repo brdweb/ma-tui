@@ -201,10 +201,22 @@ pub fn facts(item: &Value) -> Vec<(&'static str, String)> {
         ),
         ("Links", links.join(" · ")),
     ];
+    // Lists are capped as a whole too, not only entry by entry.
     candidates
         .into_iter()
         .filter(|(_, value)| !value.is_empty())
+        .map(|(label, value)| (label, capped(value)))
         .collect()
+}
+
+/// `value` cut to [`FACT_LIMIT`] characters, ending in `…` when cut.
+fn capped(value: String) -> String {
+    if value.chars().count() <= FACT_LIMIT {
+        return value;
+    }
+    let mut cut: String = value.chars().take(FACT_LIMIT - 1).collect();
+    cut.push('…');
+    cut
 }
 
 /// Keys while the pane is open: scroll, or close it.
@@ -253,7 +265,8 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
 fn wrapped(text: &str, width: usize) -> usize {
     let (mut rows, mut used) = (1, 0);
     for word in text.split(' ') {
-        let length = word.chars().count();
+        // Columns, as the paragraph wraps them: a wide character takes two.
+        let length = ratatui::text::Span::raw(word).width();
         if used > 0 && used + 1 + length > width {
             rows += 1;
             used = 0;

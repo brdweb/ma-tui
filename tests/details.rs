@@ -214,3 +214,55 @@ fn the_episode_fact_shows_whichever_number_the_publisher_gave() {
     assert_eq!(numbered(json!({"season":4})).as_deref(), Some("S4"));
     assert_eq!(numbered(json!({"season":null,"episode_number":0})), None);
 }
+
+#[test]
+fn the_end_of_wide_text_is_reachable() {
+    // Each paragraph is half as many characters as columns. Counting
+    // characters made the clamp stop scrolling before the end.
+    let mut app = connected();
+    let mut pane = Details::loading("u", "Title");
+    let mut description: Vec<String> = (0..60).map(|_| "長".repeat(40)).collect();
+    description.push("END".into());
+    pane.fill(&json!({"name":"Wide notes","metadata":{"description": description.join("\n\n")}}));
+    pane.scroll = u16::MAX;
+    app.details = Some(pane);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(110, 30)).unwrap();
+    terminal
+        .draw(|frame| ma_tui::ui::draw(frame, &mut app))
+        .unwrap();
+    let screen: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(screen.contains("END"), "the end is reachable");
+}
+
+#[test]
+fn a_details_read_that_could_not_be_sent_stops_loading() {
+    let mut app = connected();
+    app.details = Some(Details::loading("library://podcast/2", "Show"));
+    ma_tui::presentation::not_sent(
+        &mut app,
+        &Action::LoadDetails {
+            uri: "library://podcast/2".into(),
+            title: "Show".into(),
+        },
+    );
+    let pane = app.details.as_ref().unwrap();
+    assert!(!pane.loading, "the pane would say Loading… forever");
+    assert!(!pane.error.is_empty());
+    assert!(app.status.starts_with("Busy"));
+}
+
+#[test]
+fn a_long_list_fact_is_capped_as_a_whole() {
+    let authors: Vec<String> = (0..500).map(|n| format!("Author {n}")).collect();
+    let facts = details::facts(&json!({"authors": authors}));
+    let (label, value) = &facts[0];
+    assert_eq!(*label, "Authors");
+    assert_eq!(value.chars().count(), 300);
+    assert!(value.ends_with('…'));
+}

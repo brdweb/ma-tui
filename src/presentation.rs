@@ -389,8 +389,11 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
         }
         // Only for what is playing now: a fetch for an item that has since
         // been replaced must not label the new one.
+        // Kept while no item is known either (a failed or cleared queue
+        // read): the controller does not fetch the same item again, and the
+        // list is only read once the queue names that item.
         Update::Chapters { uri, chapters }
-            if crate::chapters::playing_uri(&app.queue_details) == uri =>
+            if [uri.as_str(), ""].contains(&crate::chapters::playing_uri(&app.queue_details)) =>
         {
             app.chapters = crate::chapters::Chapters {
                 uri,
@@ -452,10 +455,16 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
             }
         }
         Update::ChapterList { uri, result } => {
+            // Only the request still waited for opens a picker.
+            if app.chapter_picker.as_deref() != Some(uri.as_str()) {
+                return None;
+            }
+            app.chapter_picker = None;
             if app.settings.is_some() {
                 return None;
             }
-            if app.menu.as_ref().is_some_and(|menu| menu.prompt.is_some()) {
+            // Never replace a menu opened while the read was out.
+            if app.menu.is_some() {
                 app.status = "Chapters loaded; close the menu to choose".into();
                 return None;
             }
@@ -529,4 +538,23 @@ pub fn apply(app: &mut App, event: Update) -> Option<crate::ui::Action> {
         _ => {}
     }
     None
+}
+
+/// A request the controller could not take: say so, and settle anything
+/// that was waiting for its answer so it does not wait forever.
+pub fn not_sent(app: &mut App, action: &Action) {
+    app.status = "Busy: command not sent; try again".into();
+    match action {
+        Action::Browse { .. } => app.music.apply(
+            app.music.generation,
+            Err("Busy: press r to retry loading music".into()),
+        ),
+        Action::LoadDetails { uri, .. } => {
+            if let Some(details) = app.details.as_mut().filter(|d| d.uri == *uri) {
+                details.loading = false;
+                details.error = "Busy: details not loaded; close and try again".into();
+            }
+        }
+        _ => {}
+    }
 }
