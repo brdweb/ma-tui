@@ -849,7 +849,7 @@ fn sort_cycles_valid_orders_in_place() {
     );
 
     app.music.page.target = Target::Library {
-        kind: Kind::Tracks,
+        kind: Kind::Albums,
         offset: 0,
         favorite: false,
         search: None,
@@ -866,6 +866,25 @@ fn sort_cycles_valid_orders_in_place() {
         }
     ));
     assert_eq!(app.status, "sort: year");
+
+    // Music Assistant 2.11 has no year sort for library tracks and rejects one.
+    app.music.page.target = Target::Library {
+        kind: Kind::Tracks,
+        offset: 0,
+        favorite: false,
+        search: None,
+        order: Order::MostPlayed,
+    };
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('o')),
+        Action::Browse {
+            target: Target::Library {
+                order: Order::Random,
+                ..
+            },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -983,7 +1002,8 @@ fn podcasts_open_into_episodes_and_audiobooks_stay_a_single_item() {
         podcast.open,
         Some(Target::Podcast {
             id: "p1".into(),
-            provider: "audiobookshelf".into()
+            provider: "audiobookshelf".into(),
+            offset: 0
         })
     );
     assert!(podcast.playable, "a podcast can still be played whole");

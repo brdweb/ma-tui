@@ -1019,11 +1019,11 @@ async fn unplayed_episodes_are_gathered_across_every_show() {
         if body.contains("\"s1\"") {
             return json!([
                 {"item_id":"e1","provider":"abs","name":"One first","media_type":"podcast_episode",
-                 "uri":"library://podcast_episode/e1","fully_played":true},
+                 "uri":"library://podcast_episode/e1","fully_played":true,"position":1},
                 {"item_id":"e2","provider":"abs","name":"One second","media_type":"podcast_episode",
-                 "uri":"library://podcast_episode/e2"},
+                 "uri":"library://podcast_episode/e2","position":2},
                 {"item_id":"e3","provider":"abs","name":"One third","media_type":"podcast_episode",
-                 "uri":"library://podcast_episode/e3","resume_position_ms":5000},
+                 "uri":"library://podcast_episode/e3","resume_position_ms":5000,"position":3},
             ]);
         }
         json!([

@@ -500,10 +500,14 @@ impl ApiClient {
     /// Load one bounded page; 500 editable playlists is enough for this picker.
     pub async fn editable_playlists(&self) -> Result<Vec<crate::music::Media>> {
         let playlists = self
-            .command(
-                "music/playlists/library_items",
-                json!({"limit":500,"offset":0,"order_by":"sort_name"}),
-            )
+            .command("music/playlists/library_items", {
+                let mut args = json!({"limit":500,"offset":0});
+                crate::music::Order::Name.apply(
+                    &mut args,
+                    self.schema_at_least(crate::music::SORT_FIELDS_SCHEMA),
+                );
+                args
+            })
             .await?;
         let playlists = playlists
             .as_array()
