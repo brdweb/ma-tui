@@ -799,6 +799,9 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
             if let Action::LoadDetails { uri, title } = &action {
                 app.details = Some(crate::details::Details::loading(uri, title));
             }
+            if let Action::LoadChapters { uri } = &action {
+                app.chapter_picker = Some(uri.clone());
+            }
             // Show the new position at once, as the seek keys do.
             if let Action::Seek(position) = action {
                 return app.seek_to(position);
