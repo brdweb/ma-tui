@@ -211,19 +211,33 @@ pub fn key(app: &mut App, key: KeyEvent) -> Action {
 }
 
 /// Rows a line takes when wrapped at word boundaries, as the paragraph does.
-fn wrapped(text: &str, width: usize) -> usize {
+/// Widths are in columns, and a word too long for a row is broken between
+/// characters, never through one: a wide character that does not fit moves
+/// whole to the next row.
+pub fn wrapped(text: &str, width: usize) -> usize {
+    let columns = |text: &str| ratatui::text::Span::raw(text).width();
+    let width = width.max(1);
     let (mut rows, mut used) = (1, 0);
     for word in text.split(' ') {
-        // Columns, as the paragraph wraps them: a wide character takes two.
-        let length = ratatui::text::Span::raw(word).width();
+        let length = columns(word);
         if used > 0 && used + 1 + length > width {
             rows += 1;
             used = 0;
+        } else if used > 0 {
+            used += 1;
         }
-        used += length + usize::from(used > 0);
-        while used > width {
-            rows += 1;
-            used -= width;
+        if used + length <= width {
+            used += length;
+            continue;
+        }
+        for c in word.chars() {
+            let mut buffer = [0; 4];
+            let wide = columns(c.encode_utf8(&mut buffer));
+            if used > 0 && used + wide > width {
+                rows += 1;
+                used = 0;
+            }
+            used += wide;
         }
     }
     rows
