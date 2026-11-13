@@ -39,6 +39,8 @@ pub enum Event {
         uri: String,
         item: Option<serde_json::Value>,
     },
+    /// 2.11: this user's favourite state of a library item changed.
+    Favorite { uri: String, favorite: bool },
     /// The stream is live again; anything shown may have been missed.
     Online,
     /// The stream dropped. Polling has to carry the interface until it returns.
@@ -193,6 +195,18 @@ pub fn translate(value: &serde_json::Value) -> Option<Event> {
             Some(Event::MediaItem {
                 uri: object()?,
                 item: Some(item),
+            })
+        }
+        // 2.11: one user's favourite changed, sent only to that user's
+        // connection. `favorite` is true for a like, false for a dislike and
+        // null when cleared; only a like is a favourite here. The event names
+        // only the library item, so the controller also looks up its provider
+        // mappings for rows shown under a provider's URI.
+        "favorite_updated" => {
+            let favorite = value.get("data")?.get("favorite")? == true;
+            Some(Event::Favorite {
+                uri: object()?,
+                favorite,
             })
         }
         "media_item_deleted" => Some(Event::MediaItem {
