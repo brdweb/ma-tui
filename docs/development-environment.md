@@ -55,7 +55,7 @@ on its screen, rather than searching the raw byte history. Tests use `uv run
 A successful localhost fixture exchange is not proof of live MA compatibility.
 For stable qualification, validate actual MA 2.10.5 authentication, player registration,
 physical-device sound, codec/format changes, server restart and multi-room sync
-with explicit authorization. Retain the exact sendspin 0.3.7 pin during that work.
+with explicit authorization. Retain the exact sendspin pin (0.3.8 since 2026-11-12) during that work.
 
 ## Omarchy laptop (2026-09-08)
 

@@ -16,7 +16,7 @@ no companion player process is required.
 - See album art and a spectrum of MA-TUI's own output while it plays.
 - Save credentials in the desktop keyring; follow live Omarchy theme changes.
 
-MA-TUI targets **Music Assistant 2.10.5**. Its 1.0 scope is complete and stable,
+MA-TUI targets **Music Assistant 2.10.9**. Its 1.0 scope is complete and stable,
 but other server versions and audio devices may behave differently.
 See [Known limitations](#known-limitations).
 
@@ -296,7 +296,10 @@ Historical live validation covered login, browsing, podcast progress, the event
 stream, speaker registration and local/remote playback on Music Assistant 2.10.2.
 The 2.10.5 candidate also passed authentication, local-speaker registration,
 synthetic playback into ALSA null, progress, volume events and queue clearing
-against a disposable real 2.10.5 server. Null output does not prove audible
+against a disposable real 2.10.5 server. With Sendspin 0.3.8, local playback
+passed registration, stream start, monitored non-silent output, seek, pause and
+resume, volume and mute events, a track change and reconnect after a dropped
+socket against disposable 2.10.9 and 2.11.0b8 servers. Null output does not prove audible
 playback; desktop/physical-output qualification remains required before
 publication. Not every device, provider, acoustic latency or multi-room setup
 has been tested.

@@ -41,7 +41,7 @@ def stage():
                                   'x86_64-unknown-linux-gnu'))
     packages = sorted((p for p in metadata['packages'] if p['source']),
                       key=lambda p: (p['name'], p['version']))
-    assert any(p['name'] == 'sendspin' and p['version'] == '0.3.7' for p in packages)
+    assert any(p['name'] == 'sendspin' and p['version'] == '0.3.8' for p in packages)
     STAGE.mkdir(parents=True, exist_ok=True)
     notices = STAGE / 'third-party'
     if notices.exists():

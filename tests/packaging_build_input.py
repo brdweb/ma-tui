@@ -197,11 +197,11 @@ class BuildInputTests(unittest.TestCase):
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('fixture ' + name)
-        crate = self.root / 'registry/sendspin-0.3.7'
+        crate = self.root / 'registry/sendspin-0.3.8'
         crate.mkdir(parents=True)
         (crate / 'LICENSE').write_text('dependency license')
         packages = {'packages': [{
-            'source': 'registry+fixture', 'name': 'sendspin', 'version': '0.3.7',
+            'source': 'registry+fixture', 'name': 'sendspin', 'version': '0.3.8',
             'manifest_path': str(crate / 'Cargo.toml'), 'license': 'MIT',
             'repository': 'https://example.invalid/sendspin',
         }]}

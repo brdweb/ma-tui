@@ -70,7 +70,7 @@ def main():
         'cargo_lock_sha256': digest(ROOT / 'Cargo.lock'),
         'binary_sha256': digest(binary),
         'arch_package_sha256': digest(package),
-        'sendspin': '0.3.7',
+        'sendspin': '0.3.8',
         'flatpak': flatpak_info,
         'notice': 'Selected native Linux build wrapped with Arch makepkg and Flatpak; build_origin identifies the Rust build. This is not a reproducible-build or signing attestation.',
     }
