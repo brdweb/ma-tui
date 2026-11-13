@@ -52,6 +52,9 @@ pub struct ApiClient {
     http: reqwest::Client,
     endpoint: url::Url,
     token: String,
+    /// The server's API schema from `/info`, shared by every clone; 0 until
+    /// known. Unknown means 2.10.x behaviour.
+    schema: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 impl std::fmt::Debug for ApiClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -106,6 +109,27 @@ impl ApiClient {
         Ok(version)
     }
 
+    /// The API schema the server last reported, if it reported one.
+    pub fn schema(&self) -> Option<u32> {
+        match self.schema.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => None,
+            schema => Some(schema),
+        }
+    }
+
+    /// Whether the server reported at least schema `minimum`. An unknown
+    /// schema is treated as the oldest supported server (2.10.x), so this is
+    /// false until `/info` has said otherwise.
+    pub fn schema_at_least(&self, minimum: u32) -> bool {
+        self.schema().is_some_and(|schema| schema >= minimum)
+    }
+
+    /// Read `/info` again, so `schema` follows a server that was upgraded
+    /// while this client was running.
+    pub async fn refresh_schema(&self) -> Result<()> {
+        self.server_version().await.map(|_| ())
+    }
+
     async fn server_version(&self) -> Result<String> {
         let mut endpoint = self.endpoint.clone();
         endpoint.set_path(&format!(
@@ -122,6 +146,13 @@ impl ApiClient {
             .json()
             .await
             .map_err(|_| anyhow!("This URL did not return Music Assistant server information; use the direct Music Assistant base URL"))?;
+        // Anything but a positive whole number is no schema at all.
+        let schema = value["schema_version"]
+            .as_u64()
+            .and_then(|schema| u32::try_from(schema).ok())
+            .unwrap_or(0);
+        self.schema
+            .store(schema, std::sync::atomic::Ordering::Relaxed);
         let version = text(&value, "server_version");
         if version.is_empty() {
             return Err(anyhow!(
@@ -166,6 +197,7 @@ impl ApiClient {
                 .map_err(|_| anyhow!("Unable to initialize HTTP client"))?,
             endpoint,
             token: token.into(),
+            schema: Default::default(),
         })
     }
     pub(crate) async fn command(&self, command: &str, args: Value) -> Result<Value> {
