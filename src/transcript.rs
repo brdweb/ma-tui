@@ -116,8 +116,13 @@ pub fn timed_cues(value: &Value) -> Vec<Cue> {
         let Some(start) = cue["start"].as_f64().filter(|s| s.is_finite() && *s >= 0.0) else {
             continue;
         };
-        let text =
-            crate::text::plain(cue["text"].as_str().unwrap_or_default(), 2_000).replace('\n', " ");
+        // A cue may use whatever is left of the transcript's budget.
+        let remaining = LIMIT.saturating_sub(length);
+        if remaining == 0 || cues.len() == MAX_CUES {
+            break;
+        }
+        let text = crate::text::plain(cue["text"].as_str().unwrap_or_default(), remaining)
+            .replace('\n', " ");
         if text.is_empty() {
             continue;
         }
@@ -127,9 +132,6 @@ pub fn timed_cues(value: &Value) -> Vec<Cue> {
             .as_f64()
             .filter(|end| end.is_finite() && *end > start);
         length += speaker.chars().count() + text.chars().count() + 3;
-        if length > LIMIT || cues.len() == MAX_CUES {
-            break;
-        }
         cues.push(Cue {
             start,
             end,

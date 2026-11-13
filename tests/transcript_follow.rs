@@ -156,3 +156,10 @@ fn another_episode_playing_shows_the_plain_transcript() {
     assert!(!shown.contains("Now speaking"));
     assert!(shown.contains("Plain text of the whole episode."));
 }
+
+#[test]
+fn a_long_cue_is_followed_whole_within_the_transcript_limit() {
+    let long = "word ".repeat(600);
+    let cues = timed_cues(&json!([null, [{"start":0,"text":long}]]));
+    assert_eq!(cues[0].text, long.trim_end());
+}
