@@ -638,6 +638,9 @@ const CONCURRENT_SHOWS: usize = 6;
 /// Most episodes the unplayed list will gather, so a large subscription list
 /// cannot turn into an unbounded read.
 const MAX_UNPLAYED: usize = 300;
+/// Most pages read from one show for the unplayed shelf, so a long back
+/// catalogue of finished episodes costs a bounded number of reads.
+const MAX_SHOW_PAGES: usize = 10;
 
 /// The first API schema whose `podcast_episodes` returns one sorted page
 /// (2.11.0b6). Older servers ignore `limit` and `offset` and return every
@@ -738,14 +741,25 @@ impl ApiClient {
         let listings = futures_util::stream::iter(shows)
             .map(|(id, provider)| async move {
                 // Within a show the newest episode is the one to reach for.
-                // Its first page is plenty: the whole list is capped anyway.
-                let (episodes, _) = self.podcast_episodes(&id, &provider, 0, true).await?;
-                let episodes: Vec<Media> = episodes
-                    .iter()
-                    .map(|episode| Media::parse(episode, "podcast_episode"))
-                    .filter(|episode| !episode.fully_played)
-                    .collect();
-                Ok::<_, anyhow::Error>(episodes)
+                // Pages are followed until the shelf could be filled, so a
+                // run of finished episodes does not hide older unplayed ones.
+                let mut unplayed = Vec::new();
+                let mut offset = Some(0);
+                for _ in 0..MAX_SHOW_PAGES {
+                    let Some(from) = offset.filter(|_| unplayed.len() < MAX_UNPLAYED) else {
+                        break;
+                    };
+                    let (episodes, next) =
+                        self.podcast_episodes(&id, &provider, from, true).await?;
+                    unplayed.extend(
+                        episodes
+                            .iter()
+                            .map(|episode| Media::parse(episode, "podcast_episode"))
+                            .filter(|episode| !episode.fully_played),
+                    );
+                    offset = next;
+                }
+                Ok::<_, anyhow::Error>(unplayed)
             })
             .buffered(CONCURRENT_SHOWS)
             .collect::<Vec<_>>()
